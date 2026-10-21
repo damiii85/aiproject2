@@ -1,0 +1,6 @@
+[
+  {"id":"dongseongro","name":"동성로","district":"중구","latitude":35.870,"longitude":128.595,"radius_m":1000,"anchor":"기존 동성로 수집 중심점"},
+  {"id":"suseongmot","name":"수성못","district":"수성구","latitude":35.828,"longitude":128.617,"radius_m":1000,"anchor":"수성못 일대 파일럿 중심점"},
+  {"id":"dongdaegu","name":"동대구역","district":"동구","latitude":35.879,"longitude":128.628,"radius_m":1000,"anchor":"동대구역 일대 파일럿 중심점"},
+  {"id":"chilgok3","name":"칠곡3지구","district":"북구","latitude":35.943,"longitude":128.563,"radius_m":1000,"anchor":"동천동 중심상업지역 일대 파일럿 중심점"}
+]
