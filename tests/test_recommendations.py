@@ -48,6 +48,11 @@ class RecommendationTests(unittest.TestCase):
     def test_recommendation_ui_does_not_ask_address(self):
         app = AppTest.from_file(str(Path(__file__).resolve().parents[1] / "app.py"), default_timeout=20).run()
         self.assertFalse(any(e.label == "스팟별 데이터 확보 현황" for e in app.expander))
+        app.button(key="start").click().run()
+        next(b for b in app.button if b.label == "이 지역으로 분석하기").click().run()
+        self.assertTrue(next(b for b in app.button if b.label == "이 스팟에서 후보지 찾아보기").disabled)
+        app.radio[0].set_value("스팟 내 위치 추천").run()
+        next(b for b in app.button if b.label == "이 스팟에서 후보지 찾아보기").click().run()
         request = {"intent": "spot_recommendation", "address": "", "categories": [{"level": "small", "name": "카페"}]}
         with patch("src.services.pilot_report.parse_request", return_value=request):
             app.chat_input[0].set_value("동성로에서 카페 어디가 좋을까?").run()

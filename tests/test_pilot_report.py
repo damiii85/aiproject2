@@ -66,7 +66,12 @@ class PilotTests(unittest.TestCase):
     def test_ui_spot_switch_chat_and_history(self):
         app = AppTest.from_file(str(Path(__file__).resolve().parents[1] / "app.py"), default_timeout=20).run()
         self.assertFalse(app.exception)
-        self.assertEqual(len(app.selectbox[1].options), 4)
+        self.assertEqual(len(app.chat_input), 0)
+        app.button(key="start").click().run()
+        self.assertEqual(len([b for b in app.button if b.key and b.key.startswith("select_")]), 4)
+        next(b for b in app.button if b.label == "이 지역으로 분석하기").click().run()
+        app.text_input(key="address_query_dongseongro").set_value("중앙대로 412-21").run()
+        next(b for b in app.button if b.label == "이 위치로 분석 시작하기").click().run()
         df, _ = load_spot_data("dongseongro")
         address = "대구광역시 중구 중앙대로 412-21"
         request = {"address": address, "categories": [{"level": "small", "name": "카페"}], "clarification": ""}
@@ -74,10 +79,11 @@ class PilotTests(unittest.TestCase):
             app.chat_input[0].set_value(address + " 카페").run()
         self.assertFalse(app.exception)
         self.assertEqual(len(app.session_state["spot_sessions"]["dongseongro"]["reports"]), 1)
-        app.selectbox[1].set_value("suseongmot").run()
+        next(b for b in app.button if b.label == "새로운 분석하기").click().run()
+        app.button(key="select_suseongmot").click().run()
         self.assertFalse(app.exception)
         self.assertEqual(app.session_state["spot_sessions"]["suseongmot"]["messages"], [])
-        app.selectbox[1].set_value("dongseongro").run()
+        app.button(key="select_dongseongro").click().run()
         self.assertEqual(len(app.session_state["spot_sessions"]["dongseongro"]["reports"]), 1)
 
 
