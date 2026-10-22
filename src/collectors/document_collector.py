@@ -24,8 +24,6 @@ SOURCE_NAMES = {
     "sbiz.or.kr": "소상공인시장진흥공단",
     "data.go.kr": "공공데이터포털(원 제공기관은 문서별 확인)",
     "daegu.go.kr": "대구광역시",
-    "easylaw.go.kr": "법제처 찾기쉬운 생활법령정보",
-    "law.go.kr": "법제처 국가법령정보센터",
     "k-startup.go.kr": "K-Startup 창업지원포털",
 }
 
@@ -40,6 +38,9 @@ def canonical_url(url):
     parts = urlsplit(url.strip())
     if parts.scheme not in {"http", "https"} or not parts.hostname or parts.username or parts.password:
         raise ValueError("http/https 공개 문서 URL만 지원합니다.")
+    if any(parts.hostname == domain or parts.hostname.endswith("." + domain)
+           for domain in ("law.go.kr", "easylaw.go.kr")):
+        raise ValueError("프로젝트 수집 대상에서 제외된 출처입니다.")
     return urlunsplit((parts.scheme.lower(), parts.netloc.lower(), parts.path or "/", parts.query, ""))
 
 

@@ -13,3 +13,4 @@ chromadb
 openai
 pypdf
 beautifulsoup4
+altair

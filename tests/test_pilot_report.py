@@ -48,9 +48,8 @@ class PilotTests(unittest.TestCase):
         llm.invoke.return_value = SimpleNamespace(content=json.dumps({
             "address": "테스트로 10", "categories": [{"level": "small", "name": "여성 의류 소매업"}]}))
         result = parse_request("테스트로 10에서 옷가게", sample_frame(), llm=llm)
-        self.assertEqual(result["address"], "테스트로 10")
-        with self.assertRaises(ValueError):
-            parse_request("주소를 모르겠어", sample_frame(), llm=llm)
+        self.assertEqual(result["address"], "")
+        self.assertEqual(result['intent'], 'spot_overview')
         llm.invoke.return_value = SimpleNamespace(content=json.dumps({
             "address": "", "categories": [{"level": "small", "name": "없는 업종"}]}))
         with self.assertRaises(ValueError):
@@ -62,29 +61,33 @@ class PilotTests(unittest.TestCase):
                 df, meta = load_spot_data(spot["id"])
                 self.assertEqual(len(df), meta["count"])
                 self.assertEqual(df.bizesId.nunique(), len(df))
+                self.assertEqual(meta["center_lat"], spot["latitude"])
+                self.assertEqual(meta["center_lon"], spot["longitude"])
+                self.assertEqual(meta["radius_m"], 1000)
+                if spot.get("anchor_stop_id"):
+                    self.assertEqual(meta["anchor_stop_id"], spot["anchor_stop_id"])
+                    self.assertEqual(meta["api_total"], len(df))
 
     def test_ui_spot_switch_chat_and_history(self):
         app = AppTest.from_file(str(Path(__file__).resolve().parents[1] / "app.py"), default_timeout=20).run()
         self.assertFalse(app.exception)
         self.assertEqual(len(app.chat_input), 0)
         app.button(key="start").click().run()
-        self.assertEqual(len([b for b in app.button if b.key and b.key.startswith("select_")]), 4)
-        next(b for b in app.button if b.label == "이 지역으로 분석하기").click().run()
-        app.text_input(key="address_query_dongseongro").set_value("중앙대로 412-21").run()
-        next(b for b in app.button if b.label == "이 위치로 분석 시작하기").click().run()
+        self.assertEqual(len([b for b in app.button if b.key and b.key.startswith("select_")]), 5)
+        app.button(key="select_daegu_downtown").click().run()
+        self.assertEqual(len(app.chat_input), 1)
         df, _ = load_spot_data("dongseongro")
         address = "대구광역시 중구 중앙대로 412-21"
         request = {"address": address, "categories": [{"level": "small", "name": "카페"}], "clarification": ""}
         with patch("src.services.pilot_report.parse_request", return_value=request):
             app.chat_input[0].set_value(address + " 카페").run()
         self.assertFalse(app.exception)
-        self.assertEqual(len(app.session_state["spot_sessions"]["dongseongro"]["reports"]), 1)
-        next(b for b in app.button if b.label == "새로운 분석하기").click().run()
-        app.button(key="select_suseongmot").click().run()
+        self.assertEqual(len(app.session_state["spot_sessions"]["daegu_downtown"]["reports"]), 1)
+        app.selectbox(key='chat_spot_selector').set_value('suseongmot').run()
         self.assertFalse(app.exception)
         self.assertEqual(app.session_state["spot_sessions"]["suseongmot"]["messages"], [])
-        app.button(key="select_dongseongro").click().run()
-        self.assertEqual(len(app.session_state["spot_sessions"]["dongseongro"]["reports"]), 1)
+        app.selectbox(key='chat_spot_selector').set_value('daegu_downtown').run()
+        self.assertEqual(len(app.session_state["spot_sessions"]["daegu_downtown"]["reports"]), 1)
 
 
 if __name__ == "__main__":

@@ -23,6 +23,32 @@ from src.services.spot_catalog import get_spot, load_spots, data_paths, inventor
 
 def collect_spot(spot_id, refresh=False, session=None):
     spot = get_spot(spot_id)
+    if spot.get('components'):
+        frames, sources = [], []
+        for component in spot['components']:
+            meta = collect_spot(component['id'], refresh, session)
+            csv_path, _ = data_paths(component['id'])
+            frames.append(pd.read_csv(csv_path, dtype=str).fillna('').assign(_collected=meta['collected_at_utc']))
+            sources.append(meta)
+        combined = pd.concat(frames, ignore_index=True).sort_values('_collected', ascending=False, kind='stable')
+        combined = combined.drop_duplicates('bizesId').drop(columns='_collected')
+        directory = BASE_DIR / 'data/raw/spots' / spot_id
+        directory.mkdir(parents=True, exist_ok=True)
+        metadata = {'spot_id': spot_id, 'spot_name': spot['name'], 'source': URL,
+                    'collected_at_utc': max(s['collected_at_utc'] for s in sources),
+                    'source_date_range': sorted({s['collected_at_utc'][:10] for s in sources}),
+                    'assembled_at_utc': datetime.now(timezone.utc).isoformat(),
+                    'center_lat': spot['latitude'], 'center_lon': spot['longitude'],
+                    'radius_m': spot['radius_m'], 'count': len(combined), 'api_total': None,
+                    'coverage_type': 'union_of_circles', 'components': sources,
+                    'input_rows': sum(s['count'] for s in sources),
+                    'duplicates_removed': sum(s['count'] for s in sources)-len(combined),
+                    'anchor': spot['anchor'], 'note': spot['scope_note']}
+        combined.to_csv(directory / 'stores.csv', index=False, encoding='utf-8-sig')
+        (directory / 'metadata.json').write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding='utf-8')
+        return metadata
+    if spot["latitude"] is None or spot["longitude"] is None:
+        raise ValueError("이 지역은 PDF 자료만 있습니다. 검증된 API 수집 중심 좌표가 필요합니다.")
     existing, meta = data_paths(spot_id)
     if existing.exists() and meta.exists() and not refresh:
         return json.loads(meta.read_text(encoding="utf-8"))
@@ -69,6 +95,9 @@ def collect_spot(spot_id, refresh=False, session=None):
                 "collected_at_utc": datetime.now(timezone.utc).isoformat(),
                 "center_lon": spot["longitude"], "center_lat": spot["latitude"],
                 "radius_m": spot["radius_m"], "api_total": total_count,
+                "anchor": spot["anchor"], "anchor_source": spot.get("anchor_source", "config/daegu_spots.json"),
+                "anchor_stop_id": spot.get("anchor_stop_id", ""),
+                "anchor_reference_date": spot.get("anchor_reference_date", ""),
                 "count": len(df), "note": "파일럿 원형 수집 범위. 공식 상권 경계가 아님"}
     df.to_csv(directory / "stores.csv", index=False, encoding="utf-8-sig")
     (directory / "metadata.json").write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")

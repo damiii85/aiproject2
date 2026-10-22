@@ -14,6 +14,9 @@ def get_spot(spot_id):
     for spot in load_spots():
         if spot["id"] == spot_id:
             return spot
+        for component in spot.get('components', []):
+            if component['id'] == spot_id:
+                return dict(component, parent_id=spot['id'])
     raise ValueError("등록되지 않은 스팟입니다.")
 
 
@@ -35,5 +38,6 @@ def inventory():
                        "상가 데이터": "수집 완료" if csv_path.exists() and metadata else "미수집",
                        "점포 수": metadata.get("count", None),
                        "수집일": metadata.get("collected_at_utc", "")[:10],
-                       "매출·유동인구·임대료": "미확보", "상권 보고서": "미확보"})
+                       "매출·유동인구·임대료": "반경 자료 미확보",
+                       "상권 보고서": "사용자 제공 PDF" if (BASE_DIR / "data/reports/상권보고서.pdf").exists() else "미확보"})
     return result

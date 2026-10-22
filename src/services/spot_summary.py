@@ -10,8 +10,11 @@ from src.services.pilot_report import load_spot_data
 
 
 def export_summaries():
+    from src.services.pdf_evidence import PDF_PATH, REGIONS
     overview = []
     for spot in load_spots():
+        if not all(path.exists() for path in data_paths(spot["id"])):
+            continue
         df, metadata = load_spot_data(spot["id"])
         directory = BASE_DIR / "data/processed/spots" / spot["id"]
         directory.mkdir(parents=True, exist_ok=True)
@@ -22,7 +25,9 @@ def export_summaries():
                    "raw_csv": str(data_paths(spot["id"])[0].relative_to(BASE_DIR)),
                    "category_count": len(categories), "top_categories": categories.head(10).to_dict(orient="records"),
                    "sales": "미확보", "foot_traffic": "미확보", "rent": "미확보",
-                   "external_reports": [],
+                   "external_reports": [{'file': str(PDF_PATH.relative_to(BASE_DIR)),
+                                         'pages': list(REGIONS.get(spot['name'], ())),
+                                         'statistics_page': 2, 'reference_pages': [1, 10]}] if PDF_PATH.exists() else [],
                    "document_search_queries": [f"대구 {spot['name']} 상권 분석 보고서 소비 업종",
                                                f"대구 {spot['name']} 공실 임대 동향"]}
         (directory / "summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")

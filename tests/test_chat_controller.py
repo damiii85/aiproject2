@@ -17,12 +17,16 @@ class ChatControllerTests(unittest.TestCase):
                 self.stores, self.metadata, 200, location)
         model.assert_not_called()
         self.assertGreater(report["total_stores"], 0)
-        self.assertEqual(report["address"], location["address"])
+        self.assertEqual(report['type'], 'overview')
+        self.assertNotIn('address', report)
+        self.assertIn(location['address'], answer)
+        self.assertEqual(report['scope_center'], location['address'])
+        self.assertEqual(report['radius_m'], 200)
         self.assertIn("카페", answer)
 
     def test_recommendation_preserves_selected_mode(self):
         request = local_request("카페", self.stores, {"intent": "spot_recommendation"})
-        self.assertEqual(request["intent"], "spot_recommendation")
+        self.assertEqual(request["intent"], "spot_overview")
 
     def test_study_cafe_is_not_regular_cafe(self):
         request = local_request("스터디 카페", self.stores, {})
@@ -32,4 +36,4 @@ class ChatControllerTests(unittest.TestCase):
         with patch("src.services.pilot_report.parse_request", side_effect=RuntimeError("offline")):
             answer, report = answer_question("dongseongro", "궁금합니다", {}, self.stores, self.metadata, 200)
         self.assertIsNone(report)
-        self.assertIn("연결하지 못했습니다", answer)
+        self.assertIn("알 수 없습니다", answer)

@@ -1,299 +1,275 @@
-"""SPOT CHECK: 소개 → 지역 → 후보지 설정 → 채팅 분석."""
-
+﻿"""SPOT CHECK: 지역 정보 중심의 대화형 상권 대시보드."""
+import base64
+import copy
 import json
-from datetime import datetime
 from html import escape
+from datetime import datetime
 from zoneinfo import ZoneInfo
-
-import pandas as pd
 import streamlit as st
-
-from src.services.spot_catalog import BASE_DIR, load_spots, data_paths
-from src.services.pilot_report import load_spot_data, match_addresses, coordinates_for_address
+from src.services.spot_catalog import BASE_DIR, load_spots, data_paths, get_spot
+from src.services.pilot_report import load_spot_data
 from src.services.chat_controller import answer_question
+from src.services.pdf_evidence import report_data
+from src.services.region_analytics import distribution_rows, pdf_visuals, public_report
 from src.services.naver_map import render_map
-from src.ui.styles import apply_styles, brand, stepper, page_title
+from src.ui.analytics import render_visual, bar_chart
+from src.ui.styles import apply_styles, brand, page_title, apply_region_styles
+from src.ui.chat_layout import apply_chat_layout
 
-st.set_page_config(page_title="SPOT CHECK · 좋은 입지의 시작", page_icon=":material/location_on:",
-                   layout="wide", initial_sidebar_state="collapsed")
+st.set_page_config(page_title='SPOT CHECK · 데이터로 읽는 상권', page_icon=':material/location_on:', layout='wide', initial_sidebar_state='collapsed')
 apply_styles()
 spots = load_spots()
-st.session_state.setdefault("ui_stage", "home")
-st.session_state.setdefault("active_spot", "dongseongro")
-states = st.session_state.setdefault("spot_sessions", {})
-spot_id = st.session_state["active_spot"]
-spot = next(s for s in spots if s["id"] == spot_id)
-state = states.setdefault(spot_id, {"messages": [], "request": {}, "reports": [], "location": None, "radius": 200})
-state.setdefault("location", None)
-state.setdefault("radius", 200)
-
+st.session_state.setdefault('ui_stage', 'home')
+st.session_state.setdefault('active_spot', 'daegu_downtown')
+states = st.session_state.setdefault('spot_sessions', {})
+archives = st.session_state.setdefault('conversation_archive', [])
+valid_ids = {s['id'] for s in spots}
+for obsolete in set(states) - valid_ids:
+    del states[obsolete]
+if st.session_state['active_spot'] not in valid_ids:
+    st.session_state['active_spot'] = spots[0]['id']
+if st.session_state['ui_stage'] == 'location':
+    st.session_state['ui_stage'] = 'chat'
+# 이전 후보·주소 응답이 새 화면에 다시 나타나지 않도록 세션을 전환한다.
+if st.session_state.get('dashboard_version') != 15:
+    for saved in states.values():
+        saved['messages'], saved['reports'], saved['request'] = [], [], {}
+        saved.pop('location', None)
+        saved.pop('title', None)
+        saved.pop('updated_at', None)
+    archives.clear()
+    st.session_state['dashboard_version'] = 15
+spot_id = st.session_state['active_spot']
+spot = next(s for s in spots if s['id'] == spot_id)
+state = states.setdefault(spot_id, {'messages': [], 'request': {}, 'reports': []})
 
 @st.cache_data(ttl=300, max_entries=8)
-def cached_data(spot_id, csv_mtime, metadata_mtime):
-    return load_spot_data(spot_id)
+def cached_data(region_id, csv_mtime, metadata_mtime):
+    return load_spot_data(region_id)
 
+@st.cache_data(max_entries=2)
+def hero_image():
+    return base64.b64encode((BASE_DIR / 'assets/hero_city.png').read_bytes()).decode('ascii')
 
 def navigate(stage):
-    st.session_state["ui_stage"] = stage
+    st.session_state['ui_stage'] = stage
     st.rerun()
 
-
-def choose_spot(value):
-    st.session_state["active_spot"] = value
-    st.rerun()
-
-
-def change_chat_spot():
-    st.session_state["active_spot"] = st.session_state["chat_spot_selector"]
-    st.session_state["ui_stage"] = "location"
-
+def choose_spot(region_id):
+    st.session_state['active_spot'] = region_id
+    navigate('chat')
 
 def source_content():
-    st.markdown("**상가 데이터** · 소상공인시장진흥공단 상가정보 API")
-    st.caption("대구 4개 파일럿 중심 반경 1km의 수집본입니다. 현재 영업 여부와 공식 상권 경계를 보장하지 않습니다.")
-    st.markdown("**외부 보고서** · 확보한 PDF는 현재 채팅에 연결하기 전입니다.")
-    st.caption("매출·유동인구·임대료를 현재 점포의 실측값처럼 제공하지 않습니다.")
-    st.markdown("**지도** · NAVER Maps")
+    st.markdown('**점포 현황** · 소상공인시장진흥공단 상가정보 API 수집본')
+    st.caption('지역별 수집 범위 내 등록 정보입니다. 주소를 입력하면 해당 주소의 등록 좌표에서 직선 거리로 계산합니다. 주소가 없으면 지역 기준점을 사용하며 도심 통합상권 전체는 세 수집 원의 합집합입니다.')
+    st.markdown('**지역 통계·특성** · 사용자 제공 상권보고서.pdf (개정판)')
+    st.caption('PDF 지정 경계의 통계입니다. API 집계와 공간·기준시점이 다릅니다. 임대료·업종별 매출은 미확인입니다.')
 
 
-def topbar():
-    left, right = st.columns([1, 1.5], vertical_alignment="center")
+def render_answer(message, key):
+    visual = message.get('visual')
+    if visual and visual.get('type') == 'overview':
+        render_visual(visual, key)
+        try:
+            background = report_data(visual['spot'])
+            st.markdown(background['interpretation'])
+            if background['metrics'].get('유동인구') is not None:
+                st.caption(f"PDF 일평균 유동인구 {background['metrics']['유동인구']:,}명 · 지정 상권 경계 · 2026.07 기준. 상권보고서.pdf 2·{background['page']}쪽, 기준연월 1·10쪽.")
+            else:
+                st.caption('상권보고서.pdf 3~5쪽의 도심 세부 구역 통계를 각각 사용합니다. 중복 가능성이 있어 합산하지 않습니다.')
+        except (OSError, ValueError, IndexError):
+            st.caption('PDF의 지역 배경 정보는 확인할 수 없습니다.')
+        with st.expander('업종 설명 · 지역 해석 · 출처 자세히 보기'):
+            st.markdown(message['content'])
+    else:
+        render_visual(visual, key)
+        st.markdown(message['content'])
+
+with st.container(key='global-header'):
+    left, right = st.columns([1.2, 1], vertical_alignment='center')
     with left:
         brand()
     with right:
-        if st.session_state["ui_stage"] in {"region", "location"}:
-            stepper(1 if st.session_state["ui_stage"] == "region" else 2)
-        else:
-            links = st.columns(3)
-            with links[0].popover("서비스 소개", width="stretch"):
-                st.write("실제 상가 데이터에서 주변 업종과 경쟁 점포를 살펴보는 창업 입지 분석 파일럿입니다.")
-            with links[1].popover("이용 가이드", width="stretch"):
-                st.write("① 지역 선택 ② 주소 또는 스팟 추천 선택 ③ 채팅으로 업종과 궁금한 점 입력")
-                st.caption("대화는 현재 브라우저 세션에 저장됩니다.")
-            with links[2].popover("데이터 출처", width="stretch"):
-                source_content()
+        links = st.columns(3)
+        with links[0].popover('서비스 소개', width='stretch'):
+            st.write('대구 다섯 지역의 상가 정보와 보고서를 함께 살펴보는 상권 분석 서비스입니다.')
+        with links[1].popover('이용 가이드', width='stretch'):
+            st.write('지역을 고르고 업종이나 통계를 질문하세요. 주소와 반경을 함께 입력하면 해당 주소 기준으로 계산합니다. 특정 점포·주소의 추천이나 순위는 제공하지 않습니다.')
+        with links[2].popover('데이터 출처', width='stretch'):
+            source_content()
 
-
-def render_details(report):
-    if report.get("type") == "recommendation":
-        candidates = report["candidates"]
-        if candidates:
-            render_map(candidates[0]["latitude"], candidates[0]["longitude"],
-                       markers=[{"lat": r["latitude"], "lon": r["longitude"], "label": f"후보 {i}: {r['address']}"}
-                                for i, r in enumerate(candidates, 1)], radius=report["radius_m"])
-            for i, candidate in enumerate(candidates, 1):
-                with st.expander(f"후보 {i} · {candidate['address']}"):
-                    st.dataframe(pd.DataFrame(candidate["competitors"]), hide_index=True, alt="추천 후보지 주변 경쟁 점포")
-    else:
-        render_map(report["latitude"], report["longitude"],
-                   markers=[{"lat": report["latitude"], "lon": report["longitude"], "label": report["address"]}],
-                   radius=report["radius_m"], zoom=16)
-        st.dataframe(pd.DataFrame(report["category_counts"]), hide_index=True, alt="선택 업종 점포 수")
-        st.dataframe(pd.DataFrame(report["competitors"]), hide_index=True, alt="후보지 주변 경쟁 점포")
-    st.download_button("분석 데이터 다운로드", json.dumps(report, ensure_ascii=False, indent=2),
-                       file_name=f"{spot_id}_report.json", mime="application/json", icon=":material/download:")
-
-
-topbar()
-stage = st.session_state["ui_stage"]
-if stage == "home":
-    with st.container(key="hero"):
-        st.html('<div class="eyebrow">데이터로 찾는, 더 나은 시작</div>')
-        st.title("SPOT CHECK")
-        st.header("당신의 창업, 좋은 위치에서 시작하세요.")
-        st.html('<p class="hero-copy">대구 주요 지역의 상가 데이터와 업종별 경쟁 현황을 살펴보고,<br>내 창업 아이디어에 맞는 위치를 차근차근 탐색하세요.</p>')
-        if st.button("분석 시작하기", icon=":material/arrow_forward:", type="primary", key="start"):
-            navigate("region")
-        st.space("large")
-        a, b, c = st.columns(3)
-        a.metric("파일럿 분석 지역", "대구 4곳")
-        b.metric("지역별 수집 반경", "1km")
-        c.metric("분석 대상", "다양한 업종")
-    st.space("large")
-    for col, number, title, description in zip(st.columns(3), ["01", "02", "03"],
-        ["관심 지역을 고르세요", "나에게 맞는 위치를 설정하세요", "질문하며 상권을 살펴보세요"],
-        ["동성로부터 수성못까지, 대구의 주요 스팟을 선택하세요.",
-         "정확한 주소를 분석하거나 스팟 안에서 후보지를 찾아보세요.",
-         "궁금한 업종을 입력하면 점포 분포와 경쟁 현황을 정리합니다."]):
-        with col:
-            st.html(f'<div class="feature"><span>{number}</span><h3>{title}</h3><p>{description}</p></div>')
-    st.html('<div class="footer"><span>SPOT CHECK · 대구 창업 입지 분석 파일럿</span></div>')
+stage = st.session_state['ui_stage']
+if stage == 'home':
+    st.html('<style>.st-key-hero{background-image:linear-gradient(90deg,rgba(255,255,255,.3),transparent 65%),url("data:image/png;base64,' + hero_image() + '");}</style>')
+    with st.container(key='hero'):
+        st.html('<div class="eyebrow">DATA FOR YOUR NEXT CHAPTER</div>')
+        st.html('<h1>좋은 시작은,<br>상권을 아는 것부터.</h1>')
+        st.markdown('대구의 상권을 데이터로 읽어보세요.\n\n궁금한 업종부터 지역의 특성까지,\n\n**SPOT CHECK가 함께 살펴봅니다.**')
+        if st.button('분석 시작하기', icon=':material/arrow_forward:', type='primary', key='start'):
+            navigate('region')
+        st.caption('대구 도심 통합상권 · 수성못 · 삼덕동 · 동대구역 · 칠곡3지구')
+    with st.container(horizontal=True, key='home-features'):
+        for number, title, text in [('01', '지역을 고르세요', '대구의 다섯 상권에서 관심 지역을 선택하세요.'), ('02', '편하게 질문하세요', '궁금한 업종과 통계를 대화로 이야기해 주세요.'), ('03', '숫자를 한눈에', '확인된 통계와 출처를 그래프로 살펴보세요.')]:
+            st.html(f'<div class="feature"><small>{number}</small><h3>{title}</h3><p>{text}</p></div>')
     st.stop()
 
 try:
-    csv_path, metadata_path = data_paths(spot_id)
-    stores, metadata = cached_data(spot_id, csv_path.stat().st_mtime_ns, metadata_path.stat().st_mtime_ns)
+    csv_path, meta_path = data_paths(spot_id)
+    stores, metadata = cached_data(spot_id, csv_path.stat().st_mtime_ns, meta_path.stat().st_mtime_ns)
 except (ValueError, OSError):
-    st.warning("선택한 지역의 상가 데이터를 불러올 수 없습니다.")
-    if st.button("지역 다시 선택"):
-        navigate("region")
-    st.stop()
+    stores, metadata = None, {}
 
-if stage == "region":
-    page_title("어떤 지역에서 창업을 생각하고 계신가요?", "관심 있는 스팟을 검색하거나 아래 지역 중 선택해 주세요.")
-    left, right = st.columns([1, 1.35], gap="large")
-    with left, st.container(key="region-panel"):
-        keyword = st.text_input("지역 검색", placeholder="예: 동성로, 수성못, 동대구역", label_visibility="collapsed")
-        st.caption("추천 지역 · 대구")
-        filtered = [s for s in spots if keyword.strip() in s["name"] or keyword.strip() in s["district"]]
+if stage == 'region':
+    apply_region_styles()
+    with st.container(key='region-page'):
+        st.html('<div class="region-title"><small>SPOT CHECK</small><h1>어떤 지역이 궁금하신가요?</h1><p>지역을 선택하면 바로 채팅으로 이어집니다.</p></div>')
+        keyword = st.text_input('지역 검색', placeholder='도심 통합상권 / 수성못 / 삼덕동 / 동대구역 / 칠곡3지구 등 지역을 검색해보세요.', icon=':material/search:', key='region-search')
+        filtered = [s for s in spots if keyword.strip() in s['name'] or keyword.strip() in s['district']
+                    or any(keyword.strip() in c['name'] for c in s.get('components', []))]
+        with st.container(key='region-grid'):
+            for item in filtered:
+                with st.container(key='spot-card-' + item['id'], border=True):
+                    if st.button(item['name'], key='select_' + item['id'], width='stretch'):
+                        choose_spot(item['id'])
+                    components = '<div class="region-components">동성로 · 대구역 · 반월당</div>' if item.get('components') else ''
+                    pin = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M19 10c0 5-7 11-7 11S5 15 5 10a7 7 0 1 1 14 0Z"/><circle cx="12" cy="10" r="2.5"/></svg>'
+                    st.html(f'<div class="region-card-content"><div class="region-card-top"><span class="region-pin" aria-hidden="true">{pin}</span><div class="region-card-label"><small>DAEGU · {escape(item["district"])}</small><strong>{escape(item["name"])}</strong></div><span class="region-arrow" aria-hidden="true">→</span></div>{components}<div class="region-tags"><span>상가 현황</span><span>지역 특성</span><span>교통</span></div></div>')
         if not filtered:
-            st.info("현재 지원하는 대구 4개 스팟에서 선택해 주세요.")
-        cards = st.columns(2)
-        for index, item in enumerate(filtered):
-            with cards[index % 2], st.container(key="spot-card-" + item["id"]):
-                if st.button(f"{item['name']}  ·  대구 {item['district']}", icon=":material/location_on:",
-                             type="primary" if item["id"] == spot_id else "secondary", width="stretch", key="select_" + item["id"]):
-                    choose_spot(item["id"])
-        st.html(f'<div class="selection-card">선택한 지역 · <strong>{escape(spot["name"])}</strong><small>파일럿 중심 반경 1km · 공식 상권 경계와 다릅니다.</small></div>')
-    with right:
-        render_map(spot["latitude"], spot["longitude"], markers=[{"lat": spot["latitude"], "lon": spot["longitude"], "label": spot["name"]}], radius=1000)
-    back, advance = st.columns([1, 2])
-    if back.button("처음으로", icon=":material/arrow_back:", width="stretch"):
-        navigate("home")
-    if advance.button("이 지역으로 분석하기", type="primary", icon=":material/arrow_forward:", width="stretch"):
-        navigate("location")
+            st.info('현재 지원하는 다섯 지역에서 선택해 주세요.')
+        if st.button('처음으로', icon=':material/arrow_back:', key='region-home'):
+            navigate('home')
     st.stop()
 
-if stage == "location":
-    page_title("더 정확한 분석을 위해 위치를 설정해 주세요", "주소가 정해져 있다면 후보지를 선택하고, 아직 없다면 스팟 안에서 추천받으세요.")
-    left, right = st.columns([1, 1.15], gap="large")
-    with left, st.container(key="location-panel"):
-        mode = st.radio("분석 방식", ["정확한 주소 분석", "스팟 내 위치 추천"],
-                        horizontal=True, key="mode_" + spot_id)
-        st.caption(f"선택 지역 · 대구 {spot['district']} {spot['name']}")
-        if mode == "정확한 주소 분석":
-            query = st.text_input("후보지 주소 검색", placeholder="도로명과 건물번호를 입력하세요", key="address_query_" + spot_id)
-            if state.get("location_query", "") != query:
-                state["location"] = None
-                state["location_query"] = query
-            results = match_addresses(query, stores) if query.strip() else []
-            if results:
-                address = st.selectbox("검색된 주소", results, key="address_result_" + spot_id)
-                try:
-                    latitude, longitude = coordinates_for_address(address, stores)
-                    state["location"] = {"address": address, "latitude": latitude, "longitude": longitude}
-                except ValueError as error:
-                    st.warning(str(error))
-            elif query.strip():
-                st.warning("일치하는 도로명 주소가 없습니다. 주소를 확인하거나 아래에서 지도 좌표를 입력해 주세요.")
-            else:
-                addresses = sorted(a for a in stores["rdnmAdr"].unique() if a.strip())
-                address = st.selectbox(f"{spot['name']}의 수집된 주소에서 선택", addresses, index=None,
-                                       placeholder="클릭한 뒤 도로명으로 검색하세요", key="browse_address_" + spot_id)
-                if address:
-                    try:
-                        latitude, longitude = coordinates_for_address(address, stores)
-                        state["location"] = {"address": address, "latitude": latitude, "longitude": longitude}
-                    except ValueError as error:
-                        state["location"] = None
-                        st.warning(str(error))
-            with st.expander("지도에서 확인한 좌표 직접 입력"):
-                manual_address = st.text_input("직접 지정한 위치의 주소·이름", key="manual_address_" + spot_id)
-                lat = st.number_input("위도", min_value=35.0, max_value=37.0, value=spot["latitude"], format="%.6f", key="lat_" + spot_id)
-                lon = st.number_input("경도", min_value=128.0, max_value=130.0, value=spot["longitude"], format="%.6f", key="lon_" + spot_id)
-                if st.button("이 좌표 선택", disabled=not manual_address.strip()):
-                    state["location"] = {"address": manual_address.strip(), "latitude": lat, "longitude": lon}
-                    st.rerun()
-        else:
-            st.info(f"{spot['name']} 안에서 업종에 맞는 탐색 후보를 비교합니다. 상세 주소는 입력하지 않아도 됩니다.")
-        st.markdown("**분석 반경 설정**")
-        state["radius"] = st.segmented_control("분석 반경", [100, 200, 300, 500], default=state["radius"],
-                            required=True, format_func=lambda value: f"{value}m", key="radius_" + spot_id, label_visibility="collapsed")
-        st.caption("선택한 위치를 중심으로 원형 반경 안의 수집 상가를 분석합니다.")
-        location = state["location"] if mode == "정확한 주소 분석" else None
-        if location:
-            st.html(f'<div class="selection-card">선택한 위치<br><strong>{escape(location["address"])}</strong><small>위도 {location["latitude"]:.6f} · 경도 {location["longitude"]:.6f}</small></div>')
-        elif mode == "정확한 주소 분석":
-            st.caption("도로명 주소와 건물번호를 검색해 후보지를 선택해 주세요.")
-    with right:
-        target = location or spot
-        render_map(target["latitude"], target["longitude"], markers=[{"lat": target["latitude"], "lon": target["longitude"],
-                   "label": location["address"] if location else spot["name"]}], radius=state["radius"] if location else 1000, zoom=16 if location else 14)
-        st.caption("주소는 수집본의 건물 대표 좌표로 표시합니다. 실제 출입구·층 위치는 현장에서 확인해 주세요.")
-    back, advance = st.columns([1, 2])
-    if back.button("이전으로", icon=":material/arrow_back:", width="stretch"):
-        navigate("region")
-    if advance.button("이 위치로 분석 시작하기" if location else "이 스팟에서 후보지 찾아보기", type="primary",
-                      icon=":material/arrow_forward:", width="stretch", disabled=mode == "정확한 주소 분석" and location is None):
-        state["location"] = location
-        state["request"] = {"address": location["address"] if location else "", "categories": [],
-                            "intent": "address_analysis" if location else "spot_recommendation"}
-        state["analysis_mode"] = "address_analysis" if location else "spot_recommendation"
-        navigate("chat")
-    st.stop()
+workspace = st.container(key='workspace')
+with workspace.container(key='workspace-controls'):
+    workspace_view = st.segmented_control('화면 보기', ['채팅', '분석', '대화 목록'], default='채팅',
+                                          key='workspace_view', label_visibility='collapsed', required=True)
+apply_chat_layout(workspace_view)
+grid = workspace.container(key='workspace-grid')
+history, conversation, details = grid.columns([16, 54, 30], gap='medium')
+with history, st.container(key='conversation-nav'):
+    with st.container(key='history-header'):
+        if st.button('새 대화하기', icon=':material/add:', type='primary', width='stretch', key='new_chat'):
+            if state['messages']:
+                archives.insert(0, {'spot_id': spot_id, 'state': copy.deepcopy(state)})
+                del archives[12:]
+            states[spot_id] = {'messages': [], 'request': {}, 'reports': []}
+            navigate('region')
+        st.caption('최근 대화')
+    with st.container(height=200, border=False, key='history-list'):
+        threads = [(s, states.get(s['id'], {})) for s in spots if states.get(s['id'], {}).get('messages')]
+        if not threads and not archives:
+            st.caption('대화를 시작하면 여기에 표시돼요.')
+        for item, saved in threads:
+            if st.button(saved.get('title', item['name'] + ' 상권 살펴보기'), icon=':material/chat_bubble_outline:', key='thread_' + item['id'], width='stretch', type='primary' if item['id'] == spot_id else 'secondary'):
+                choose_spot(item['id'])
+            st.caption(saved.get('updated_at', '현재 세션'))
+        for index, archived in enumerate(archives[:6]):
+            if st.button(archived['state'].get('title', '이전 대화'), key=f'archive_{index}', width='stretch'):
+                current = copy.deepcopy(states.get(archived['spot_id'], {}))
+                states[archived['spot_id']] = copy.deepcopy(archived['state'])
+                if current.get('messages'):
+                    archives[index] = {'spot_id': archived['spot_id'], 'state': current}
+                else:
+                    archives.pop(index)
+                choose_spot(archived['spot_id'])
+    with st.container(key='history-footer'):
+        st.html('<div class="nav-note"><small>데이터로 찾는, 더 나은 시작</small><strong>당신의 다음 시작을<br>SPOT CHECK와 함께.</strong><span>확인된 숫자와 근거로<br>지역을 이해하세요.</span></div>')
 
-# 채팅 화면
-context, conversation = st.columns([1, 3], gap="large")
-with context, st.container(key="chat-context"):
-    st.markdown("### 선택한 분석 정보")
-    st.session_state["chat_spot_selector"] = spot_id
-    st.selectbox("분석 지역", [s["id"] for s in spots],
-                                format_func=lambda value: next(s["name"] for s in spots if s["id"] == value),
-                                key="chat_spot_selector", on_change=change_chat_spot)
-    st.caption(f"대구 › {spot['name']}")
-    location = state["location"]
-    if location:
-        label = location["address"]
-    else:
-        label = f"{spot['name']} 내 후보지 추천"
-    st.html(f'<div class="selection-card"><strong>{escape(label)}</strong><small>분석 반경 {state["radius"]}m</small></div>')
-    if st.button("위치 수정", icon=":material/edit_location_alt:", width="stretch"):
-        navigate("location")
-    st.divider()
-    st.markdown("### 주요 분석 항목")
-    st.markdown(":material/storefront: 주변 상가 현황\n\n:material/query_stats: 업종별 경쟁 분석\n\n:material/location_on: 후보지 비교")
-    st.caption("교통·외부 문서 기반 해설은 연결 준비 중입니다.")
-    if st.button("새로운 분석하기", icon=":material/add:", width="stretch"):
-        navigate("region")
-    st.divider()
-    st.markdown("### 분석 기록")
-    if not state["reports"]:
-        st.caption("첫 분석을 시작해 보세요.")
-    for report in reversed(state["reports"][-5:]):
-        industries = ", ".join(c["name"] for c in report.get("categories", []))
-        st.markdown(f"**{escape(spot['name'])} · {escape(industries or '입지')}**")
-        st.caption(report.get("created_at", "현재 세션"))
-    if st.button("이 스팟 대화 초기화", width="stretch"):
-        state["messages"], state["reports"], state["request"] = [], [], {}
-        st.rerun()
-
-with conversation:
-    chat_feed = st.container(height=610, border=False, key="chat-feed")
-    with chat_feed:
-        with st.chat_message("assistant", avatar=":material/smart_toy:"):
-            st.markdown("안녕하세요! **SPOT CHECK**입니다.")
-            st.write("선택하신 위치의 상가 데이터를 바탕으로 창업 입지 분석을 도와드릴게요. 어떤 업종을 생각하고 계신가요?")
-        quick_question = None
-        with st.container(horizontal=True):
-            for industry in ["카페", "여성 의류", "미용실", "음식점", "편의점", "네일숍"]:
-                if st.button(industry, key="quick_" + industry):
-                    quick_question = (f"{label}에서 {industry} 창업을 분석해 줘" if location
-                                      else f"{spot['name']}에서 {industry}를 하고 싶은데 어디가 좋을까?")
-        for message in state["messages"]:
-            with st.chat_message(message["role"], avatar=":material/smart_toy:" if message["role"] == "assistant" else ":material/person:"):
-                st.markdown(message["content"])
-    question = st.chat_input("창업할 업종이나 추가로 궁금한 점을 질문해 주세요.", max_chars=3000) or quick_question
+with conversation, st.container(key='conversation-panel', border=True):
+    chat_header = st.container(key='chat-heading')
+    heading, selector = chat_header.columns([1.2, 1])
+    with heading:
+        st.markdown(f'**{spot["name"]} 상권 이야기**')
+        st.caption(state.get('title', '지역을 이해하는 대화'))
+    with selector:
+        def change_region():
+            st.session_state['active_spot'] = st.session_state['chat_spot_selector']
+        st.selectbox('분석 지역', [s['id'] for s in spots], index=[s['id'] for s in spots].index(spot_id), format_func=lambda value: next(s['name'] for s in spots if s['id'] == value), key='chat_spot_selector', on_change=change_region, label_visibility='collapsed')
+    feed = st.container(height=565, border=False, key='chat-feed', autoscroll=True)
+    with feed:
+        with st.chat_message('assistant', avatar=':material/smart_toy:'):
+            st.markdown('안녕하세요! **SPOT CHECK**입니다.')
+            st.write(f'{spot["name"]}의 상가 데이터와 보고서를 함께 살펴볼게요. 어떤 업종을 생각하고 계신가요?')
+            st.caption('예: 카페를 하고 싶어요 · 유동인구는 몇 명이야? · 지역 특징이 궁금해요')
+        for index, message in enumerate(state['messages']):
+            with st.chat_message(message['role'], avatar=':material/smart_toy:' if message['role'] == 'assistant' else ':material/person:'):
+                render_answer(message, f'{spot_id}-message-{index}')
+                if message.get('time'):
+                    st.caption(message['time'])
+    composer = st.container(key='chat-composer')
+    prompt = None
+    with composer.container(horizontal=True, wrap=False, key='quick-prompts'):
+        for industry in ['카페', '여성 의류', '미용실', '음식점', '편의점', '네일숍']:
+            if st.button(industry, key='quick_' + industry):
+                prompt = f'{spot["name"]}에서 {industry}를 하고 싶어요'
+        if st.button('유동인구', key='quick_population'):
+            prompt = f'{spot["name"]}의 유동인구는 몇 명이야?'
+    question = composer.chat_input('궁금한 내용을 자유롭게 질문해 주세요.', max_chars=3000) or prompt
     if question:
-        with chat_feed:
-            state["messages"].append({"role": "user", "content": question})
-            with st.chat_message("user", avatar=":material/person:"):
-                st.write(question)
-            with st.chat_message("assistant", avatar=":material/smart_toy:"):
-                with st.status("입지 분석을 진행하고 있습니다…", expanded=True) as progress:
-                    st.write("주소와 업종을 확인하고 수집 상가에서 분석 근거를 집계합니다.")
-                    try:
-                        answer, report = answer_question(spot_id, question, state, stores, metadata,
-                                                         state["radius"], state["location"])
-                        if report:
-                            report["created_at"] = datetime.now(ZoneInfo("Asia/Seoul")).strftime("%Y.%m.%d %H:%M")
-                            state["reports"].append(report)
-                        progress.update(label="분석 완료" if report else "추가 정보가 필요합니다", state="complete", expanded=False)
-                    except Exception as error:
-                        answer = str(error) if isinstance(error, ValueError) else "분석 요청을 처리하지 못했습니다. 잠시 후 다시 시도해 주세요."
-                        progress.update(label="분석을 완료하지 못했습니다", state="error", expanded=False)
-                st.markdown(answer)
-            state["messages"].append({"role": "assistant", "content": answer})
-    if state["reports"]:
-        with st.expander("최근 분석의 지도·상세 데이터 보기"):
-            render_details(state["reports"][-1])
-    st.caption("현재 세션의 분석 기록입니다. 수집 범위와 시점에 따른 한계를 함께 확인해 주세요.")
+        now = datetime.now(ZoneInfo('Asia/Seoul'))
+        state['messages'].append({'role': 'user', 'content': question, 'time': now.strftime('%H:%M')})
+        with st.spinner('지역 데이터와 출처를 살펴보고 있어요…'):
+            try:
+                answer, report = answer_question(spot_id, question, state, stores, metadata, 1000)
+                report = public_report(report)
+                if report:
+                    report['created_at'] = now.strftime('%Y.%m.%d %H:%M')
+                    state['reports'].append(report)
+                visual = report or pdf_visuals(spot_id, question, answer)
+            except Exception as error:
+                answer = str(error) if isinstance(error, ValueError) else '자료에서 답을 확인하지 못했습니다. 알 수 없는 내용은 추측하지 않습니다.'
+                visual = None
+        state['messages'].append({'role': 'assistant', 'content': answer, 'visual': visual, 'time': now.strftime('%H:%M')})
+        if 'title' not in state:
+            names = ', '.join(c['name'] for c in state.get('request', {}).get('categories', []))
+            state['title'] = spot['name'] + ' · ' + (names + ' 현황' if names else '지역 통계')
+        state['updated_at'] = now.strftime('%Y.%m.%d %H:%M')
+        st.rerun()
+    composer.caption('주소와 반경을 입력하면 해당 주소 기준으로 계산합니다. 특정 점포·주소의 추천이나 입지 순위는 제공하지 않습니다.')
+
+with details, st.container(key='insights-panel', border=True):
+    latest = next((r for r in reversed(state['reports']) if r.get('parent_id', r.get('region_id')) == spot_id), None)
+    st.markdown(f'**:material/map: {spot["name"]} 지역 지도**')
+    map_spot = get_spot(latest['region_id']) if latest else spot
+    if latest and latest.get('scope_latitude') is not None:
+        map_spot = dict(map_spot, latitude=latest['scope_latitude'], longitude=latest['scope_longitude'])
+    map_radius = latest['radius_m'] if latest else 1000
+    union_scope = latest.get('scope_kind') == 'union' if latest else bool(spot.get('components'))
+    points = [{'lat':c['latitude'],'lon':c['longitude'],'label':c['name']} for c in spot.get('components', [])] if union_scope else []
+    if map_spot['latitude'] is not None:
+        render_map(map_spot['latitude'], map_spot['longitude'], markers=points, radius=map_radius, show_markers=False, height=265)
+    scope_label = latest['scope_description'] if latest else spot.get('scope_note', f"지역 수집 기준점 반경 {map_radius:g}m")
+    st.caption(scope_label + ' · PDF 상권 경계와 다릅니다.')
+    st.markdown('**:material/analytics: 주요 통계**')
+    try:
+        pdf = report_data(spot['name'])
+    except (OSError, ValueError, IndexError):
+        pdf = None
+    a, b = st.columns(2)
+    with a:
+        st.metric('API 집계 범위 상가', f"{latest['total_stores']:,}곳" if latest else f'{len(stores):,}곳' if stores is not None else '미수집')
+        st.caption(', '.join(metadata.get('source_date_range', [metadata.get('collected_at_utc', '')[:10]])) + ' 원본 수집')
+        footfall = pdf['metrics'].get('유동인구') if pdf else None
+        st.metric('PDF 일평균 유동인구', f"{footfall:,}명" if footfall is not None else '세부 구역별' if pdf else '확인 불가')
+        st.caption('PDF 지정 경계 · 2026.07 기준')
+    with b:
+        st.metric('선택 업종 점포', f"{latest['competitor_count']:,}곳" if latest else '업종 선택 전')
+        st.caption('API 수집 범위 기준')
+        st.metric('임대료', '자료 없음')
+        st.caption('추정값을 표시하지 않습니다.')
+    if pdf:
+        st.caption('PDF 출처: 상권보고서.pdf 2쪽 표, 1·10쪽 기준연월. 도심 세 구역의 수치는 합산하지 않습니다. 원천 갱신 기준이며 조회 기간은 별도 확인이 필요합니다.')
+    st.divider()
+    st.markdown('**:material/bar_chart: 지역 업종 구성**')
+    if stores is not None:
+        distribution = latest['all_distribution'] if latest else {str(k): int(v) for k, v in stores.indsLclsNm.value_counts().items()}
+        bar_chart(distribution_rows(distribution), '업종', '점포 수', f'distribution-{spot_id}', 190)
+        st.caption(f"출처: 상가정보 API · {', '.join(metadata.get('source_date_range', [metadata.get('collected_at_utc', '')[:10]]))} · 위 집계 범위의 업종 구성")
+    if latest:
+        st.markdown('**선택 업종의 구성**')
+        bar_chart(distribution_rows(latest['distribution']), '업종', '점포 수', f'selected-distribution-{spot_id}', 140)
+        st.caption('API의 실제 소분류 기준입니다. 프랜차이즈·개인 매장 여부는 이 자료에서 확인되지 않습니다.')
+        st.download_button('지역 통계 다운로드', json.dumps(latest, ensure_ascii=False, indent=2), file_name=f'{spot_id}_regional_statistics.json', mime='application/json', key='download_stats')
+    else:
+        st.info('업종을 말씀해 주시면 점포 수와 비중을 함께 보여드려요.')

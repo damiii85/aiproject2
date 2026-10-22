@@ -1,62 +1,55 @@
+﻿"""구체적인 입지 추천이 다시 노출되지 않는지 검증한다."""
 import json
 import unittest
-from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import Mock, patch
-
-from streamlit.testing.v1 import AppTest
-
-from src.services.naver_map import map_html
+from unittest.mock import Mock
+from src.services.chat_controller import answer_question
 from src.services.pilot_report import load_spot_data, parse_request
-from src.services.spot_catalog import load_spots
-from src.services.spot_recommender import recommend_candidates
+from src.services.naver_map import map_html
+from src.services.region_analytics import public_report, distribution_rows, pdf_visuals
+from src.services.pdf_evidence import pdf_answer
 
+class RegionalInformationPolicyTests(unittest.TestCase):
+    def test_recommendation_is_always_aggregate_even_with_old_state(self):
+        stores, meta = load_spot_data('dongseongro')
+        state = {'request': {'intent':'spot_recommendation', 'address':'중앙대로 412-21', 'categories':[{'level':'small','name':'카페'}]}}
+        for question in ('카페 어디가 좋을까?', '중앙대로 412-21에 카페 추천해줘', '후보 top3 알려줘'):
+            answer, report = answer_question('dongseongro', question, state, stores, meta, 200)
+            self.assertEqual(report['type'], 'overview')
+            for key in ('address','latitude','longitude','candidates','competitors'):
+                self.assertNotIn(key, report)
+            # 직접 입력한 주소는 집계 기준으로만 사용하며 점포 추천은 만들지 않는다.
+            if '412-21' in question or state.get('address_location'):
+                self.assertIn('직선 반경', report['scope_description'])
+            else:
+                self.assertNotIn('412-21', answer)
+            self.assertNotIn('입지 탐색 후보', answer)
 
-class RecommendationTests(unittest.TestCase):
-    def test_intent_clears_previous_address(self):
-        df, _ = load_spot_data("dongseongro")
-        llm = Mock()
-        llm.invoke.return_value = SimpleNamespace(content=json.dumps({
-            "intent": "spot_recommendation", "address": "중앙대로 412-21",
-            "categories": [{"level": "small", "name": "카페"}]}))
-        result = parse_request("동성로 카페 어디가 좋을까", df,
-                               {"address": "중앙대로 412-21"}, llm=llm)
-        self.assertEqual(result["intent"], "spot_recommendation")
-        self.assertEqual(result["address"], "")
-
-    def test_real_data_candidates_are_covered_and_counts_match(self):
-        for spot in load_spots():
-            with self.subTest(spot=spot["id"]):
-                df, metadata = load_spot_data(spot["id"])
-                result = recommend_candidates(spot["id"], df, metadata, [{"level": "small", "name": "카페"}])
-                self.assertGreater(len(result["candidates"]), 0)
-                self.assertLessEqual(len(result["candidates"]), 3)
-                for report in result["candidates"]:
-                    self.assertTrue(report["coverage_complete"])
-                    self.assertGreaterEqual(report["total_stores"], result["median_total"])
-                    self.assertEqual(report["competitor_count"], len(report["competitors"]))
-                    self.assertTrue(all(row["업종"] == "카페" for row in report["competitors"]))
+    def test_model_cannot_restore_address_recommendation(self):
+        stores, _ = load_spot_data('dongseongro')
+        model = Mock()
+        model.invoke.return_value = SimpleNamespace(content=json.dumps({'address':'생성한 주소', 'intent':'spot_recommendation', 'categories':[{'level':'small','name':'카페'}]}))
+        result = parse_request('위치 추천', stores, llm=model)
+        self.assertEqual(result['address'], '')
+        self.assertEqual(result['intent'], 'spot_overview')
 
     def test_map_escapes_untrusted_labels(self):
-        html = map_html("test-client-id", 35.87, 128.595,
-                        [{"lat": 35.87, "lon": 128.595, "label": "</script><script>alert(1)</script>"}])
-        self.assertNotIn("</script><script>alert", html)
-        self.assertIn("ncpKeyId=test-client-id", html)
-        self.assertIn("textContent", html)
-        self.assertNotIn("CLIENT_SECRET", html)
+        html = map_html('test-client-id', 35.87, 128.595, [{'lat':35.87,'lon':128.595,'label':'</script><script>alert(1)</script>'}])
+        self.assertNotIn('</script><script>alert', html)
+        self.assertIn('ncpKeyId=test-client-id', html)
+        self.assertIn('textContent', html)
+        regional = map_html('test',35.87,128.595,show_markers=False)
+        self.assertIn('"show_markers": false', regional)
 
-    def test_recommendation_ui_does_not_ask_address(self):
-        app = AppTest.from_file(str(Path(__file__).resolve().parents[1] / "app.py"), default_timeout=20).run()
-        self.assertFalse(any(e.label == "스팟별 데이터 확보 현황" for e in app.expander))
-        app.button(key="start").click().run()
-        next(b for b in app.button if b.label == "이 지역으로 분석하기").click().run()
-        self.assertTrue(next(b for b in app.button if b.label == "이 스팟에서 후보지 찾아보기").disabled)
-        app.radio[0].set_value("스팟 내 위치 추천").run()
-        next(b for b in app.button if b.label == "이 스팟에서 후보지 찾아보기").click().run()
-        request = {"intent": "spot_recommendation", "address": "", "categories": [{"level": "small", "name": "카페"}]}
-        with patch("src.services.pilot_report.parse_request", return_value=request):
-            app.chat_input[0].set_value("동성로에서 카페 어디가 좋을까?").run()
-        self.assertFalse(app.exception)
-        reports = app.session_state["spot_sessions"]["dongseongro"]["reports"]
-        self.assertEqual(reports[-1]["type"], "recommendation")
-        self.assertGreater(len(reports[-1]["candidates"]), 0)
+    def test_distribution_keeps_total_and_old_reports_are_filtered(self):
+        rows = distribution_rows({str(i):i+1 for i in range(10)})
+        self.assertEqual(sum(r['점포 수'] for r in rows),55)
+        self.assertEqual(rows[-1]['업종'],'그 외 업종')
+        self.assertIsNone(public_report({'type':'recommendation','candidates':[{'address':'secret'}]}))
+        self.assertNotIn('competitors',public_report({'type':'overview','competitors':[{'주소':'secret'}]}))
+
+    def test_pdf_graphs_only_use_the_answered_values(self):
+        answer = pdf_answer('banwoldang','반월당 유동인구')
+        visual = pdf_visuals('banwoldang','반월당 유동인구',answer)
+        self.assertEqual(visual['rows'],[{'지역':'반월당','지표':'유동인구','값':18012,'단위':'명/일'}])
+        self.assertIsNone(pdf_visuals('banwoldang','임대료',pdf_answer('banwoldang','임대료')))

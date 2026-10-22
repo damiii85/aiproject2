@@ -1,33 +1,29 @@
-# SPOT CHECK
+﻿# SPOT CHECK
 
-동성로 상권 브리핑 및 창업 후보지 입지 분석을 위한 RAG 프로젝트입니다.
+API 수집본과 사용자 제공 PDF를 함께 읽는 대구 상권 정보 대시보드입니다.
 
-## 시작하기
+지원 권역: **대구 도심 통합상권(동성로·대구역·반월당) / 수성못 / 삼덕동 / 동대구역 / 칠곡3지구**.
 
-1. Python 3.10+ 설치
-2. `python -m venv .venv`
-3. Windows PowerShell: `.\.venv\Scripts\Activate.ps1` (또는 Git Bash: `source .venv/Scripts/activate`)
-4. `pip install -r requirements.txt`
-5. `.env`에 `PUBLIC_DATA_API_KEY` 및 필요 시 `OPENAI_API_KEY` 입력
-6. `python collect_stores.py` → `data/raw/`에 JSON/CSV 저장
-7. `streamlit run app.py` → UI 골격 실행
+- 도심 API 수집본은 세 지역 원본 23,785행을 상가 ID로 중복 제거한 10,759곳입니다. 단순 합산하지 않습니다.
+- 동대구역 3,321곳, 칠곡3지구 2,359곳, 수성못 2,106곳, 삼덕동 7,009곳의 수집본이 있습니다. 수집 시점의 등록 정보입니다.
+- 채팅 지정 PDF는 `data/reports/상권보고서.pdf`(개정판 10쪽)입니다. 종전 지정 PDF는 프로젝트에서 삭제했습니다.
+- PDF의 도심 세 구역 통계는 각각 표시하고 합산하지 않습니다. 동대구역·칠곡3지구의 PDF 상권 경계는 미확정입니다.
+- 질문의 `100m`, `100미터`, `0.1km`를 파싱해 실제 좌표 거리로 다시 집계합니다. 반경·기준점·출처를 표시하고 후속 질문에서도 업종과 기준점을 유지합니다.
+- 위치 정보가 없으면 지역별 수집 기준점을 사용하며 사용자의 현재 위치라고 표현하지 않습니다. 알려지지 않은 현재 위치나 수집 범위 밖의 전체 점포 수는 추측하지 않습니다.
+- 주소와 반경을 입력하면 해당 주소의 API 등록 좌표를 기준으로 계산합니다(예: `대구 중구 중앙대로 412-21 100m 카페`). 후속 반경 질문에서도 주소를 유지하며 `지역 전체`로 해제합니다. 수집본에서 확인되지 않는 주소는 기점으로 대체하지 않습니다. 별도 주소 검색 API는 호출하지 않습니다.
+- 수치 카드·도넛·막대그래프와 지도 범위는 같은 집계 결과를 사용합니다. PDF 수치를 요청 반경으로 환산하지 않습니다.
+- 특정 점포·주소 추천과 후보 순위는 제공하지 않습니다. PDF는 기본 답변에서 외부 모델로 보내지 않습니다.
 
-## 프로젝트 폴더
-- `collect_stores.py`: 상가(상권)정보 API 수집
-- `data/raw/`: 원본 및 수집 결과 (Git 제외)
-- `data/processed/`: 가공 데이터 (Git 제외)
-- `src/collectors/`: 외부 문서 수집 코드 예정
-- `src/rag/`: 청킹·색인·LangGraph 검색/생성 예정
-- `src/services/`: 상권 통계·주소 비교 예정
-- `src/utils/`: 공통 유틸 예정
-- `config/`: 검색 설정 예정
-- `docs/`: 요구사항·파이프라인 설계·출처 기록
-- `tests/`: 검증 코드 예정
+## 실행 (Git Bash)
 
-## 주의
-- `.env`의 실제 키를 Git 또는 ZIP 공유본에 포함하지 마세요.
-- API 키는 일반적으로 **Decoding 키**를 사용하고, `requests`의 `params`로 전달합니다.
-- 좌표는 동성로 일대의 **예시 중심점**이며 공식 상권 경계가 아닙니다.
-- 현재 `app.py`는 동작하는 UI 골격만 포함합니다. RAG 및 주소 비교는 미구현입니다.
-- 수업 `step7_skeleton.py`를 참고해 Streamlit UI를 확장하세요.
-- 외부 API 응답 구조 및 호출 제한은 최초 실행 시 확인해야 합니다.
+```bash
+python -m pip install -r requirements.txt
+python -m streamlit run app.py
+python -m unittest discover -s tests -v
+```
+
+`.env`의 키는 공유·커밋하지 않습니다. API 수집에는 `PUBLIC_DATA_API_KEY`, 모호한 업종 해석에는 `GMS_API_KEY`를 사용합니다. 원본 CSV/PDF는 Git 제외이므로 다른 서버에는 별도 복사하거나 수집해야 합니다.
+
+실행 중 모듈 정의가 바뀌면 서버 터미널에서 Ctrl+C 후 다시 실행하세요. 브라우저 새로고침만으로 오래된 import가 교체되지는 않을 수 있습니다.
+
+자료 범위·실행: `docs/daegu_pilot.md`. 화면 흐름: `docs/ui_flow.md`. 파일별 변경 기록: `작업진행.md`.
