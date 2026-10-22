@@ -6,6 +6,8 @@ import ipaddress
 import json
 import os
 import socket
+import time
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit, urljoin
@@ -26,6 +28,26 @@ SOURCE_NAMES = {
     "daegu.go.kr": "대구광역시",
     "k-startup.go.kr": "K-Startup 창업지원포털",
 }
+_REQUEST_LOCK=threading.Lock()
+_LAST_REQUEST={}
+
+
+def polite_request(method,url,**kwargs):
+    """호스트별 최소 간격 및 429/일시 오류의 제한된 재시도."""
+    host=urlsplit(url).hostname
+    for attempt in range(3):
+        with _REQUEST_LOCK:
+            delay=.5-(time.monotonic()-_LAST_REQUEST.get(host,0))
+            if delay>0:
+                time.sleep(delay)
+            _LAST_REQUEST[host]=time.monotonic()
+        response=getattr(requests,method)(url,**kwargs)
+        if response.status_code not in (429,500,502,503,504) or attempt==2:
+            return response
+        response.close()
+        retry_after=response.headers.get('Retry-After','')
+        pause=min(float(retry_after),5) if retry_after.isdigit() else .5*(2**attempt)
+        time.sleep(pause)
 
 
 def source_name(url):
@@ -57,7 +79,7 @@ def request_document(url, max_bytes=MAX_BYTES):
     """리다이렉트 대상도 검증하며 응답 크기를 제한한다."""
     for _ in range(6):
         url = validate_public_url(url)
-        with requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=(10, 40),
+        with polite_request('get',url, headers={"User-Agent": USER_AGENT}, timeout=(10, 40),
                           allow_redirects=False, stream=True) as response:
             if response.is_redirect:
                 url = urljoin(url, response.headers["Location"])
@@ -88,24 +110,40 @@ def check_robots(url):
     return "robots.txt 허용; 저작권·이용조건 별도 확인 필요"
 
 
-def search_documents(queries, max_results=5):
+def search_documents(queries, max_results=5, cache_dir=None, cache_ttl=86400):
     api_key = os.getenv("TAVILY_API_KEY")
     if not api_key:
         raise ValueError("자동 검색에는 TAVILY_API_KEY가 필요합니다. 검색 키 없이 --url로 문서를 지정할 수 있습니다.")
     if not 1 <= max_results <= 20:
         raise ValueError("후보 개수는 1~20이어야 합니다.")
     candidates = {}
+    cache_dir=Path(cache_dir or Path(__file__).resolve().parents[2]/'data/raw/external_search_cache')
     for query in queries:
-        response = requests.post(
-            "https://api.tavily.com/search", timeout=(10, 40),
-            headers={"Authorization": f"Bearer {api_key}"},
-            json={"query": query, "max_results": max_results,
-                  "include_domains": DEFAULT_DOMAINS, "include_answer": False,
-                  "include_raw_content": False},
-        )
-        response.raise_for_status()
-        for item in response.json().get("results", []):
-            url = canonical_url(item["url"])
+        identity=hashlib.sha256(json.dumps([query.strip(),max_results,DEFAULT_DOMAINS]).encode()).hexdigest()
+        cache_path=cache_dir/(identity+'.json')
+        payload=None
+        if cache_path.is_file() and time.time()-cache_path.stat().st_mtime<cache_ttl:
+            try:
+                payload=json.loads(cache_path.read_text(encoding='utf-8'))
+            except (OSError,ValueError):
+                pass
+        if payload is None:
+            response = polite_request('post',
+                "https://api.tavily.com/search", timeout=(10, 40),
+                headers={"Authorization": f"Bearer {api_key}"},
+                json={"query": query, "max_results": max_results,
+                      "include_domains": DEFAULT_DOMAINS, "include_answer": False,
+                      "include_raw_content": False},
+            )
+            response.raise_for_status()
+            payload=response.json()
+            cache_dir.mkdir(parents=True,exist_ok=True)
+            cache_path.write_text(json.dumps(payload,ensure_ascii=False),encoding='utf-8')
+        for item in payload.get("results", []):
+            try:
+                url = canonical_url(item["url"])
+            except (ValueError,KeyError):
+                continue
             if urlsplit(url).path in {"", "/"}:
                 continue
             candidates[url] = {"title": str(item.get("title", ""))[:500], "url": url,
@@ -126,10 +164,18 @@ def extract_html(data):
     return title, text
 
 
-def collect_document(url, output_dir, title="", source="", usage_note="미확인: 원문 이용조건 확인 필요"):
+def collect_document(url, output_dir, title="", source="", usage_note="미확인: 원문 이용조건 확인 필요",cache_ttl=86400):
     url = canonical_url(url)
     if urlsplit(url).path == "/":
         raise ValueError("기관 메인 페이지 대신 실제 문서 상세 URL을 지정해 주세요.")
+    cache_path=Path(output_dir)/(hashlib.sha256(url.encode()).hexdigest()+'.json')
+    if cache_path.is_file() and time.time()-cache_path.stat().st_mtime<cache_ttl:
+        try:
+            cached=json.loads(cache_path.read_text(encoding='utf-8'))
+            if cached.get('text') and cached.get('requested_url')==url:
+                return cached
+        except (OSError,ValueError):
+            pass
     robots_note = check_robots(url)
     final_url, data, content_type = request_document(url)
     if final_url != url:

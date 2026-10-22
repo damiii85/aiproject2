@@ -66,9 +66,22 @@ def _structured_answer(spot_id, question, state, stores, metadata, radius, locat
     return text, report
 
 
-def answer_question(spot_id, question, state, stores, metadata, radius, location=None):
+def answer_question(spot_id, question, state, stores, metadata, radius, location=None, progress=None):
+    from src.rag.pipeline import ACTIVE, run
+    if ACTIVE.get():
+        return _legacy_answer_question(spot_id,question,state,stores,metadata,radius,location)
+    state.pop('rag_last',None)
+    return run(spot_id,question,state,stores,metadata,radius,location,_legacy_answer_question,progress)
+
+
+def _legacy_answer_question(spot_id, question, state, stores, metadata, radius, location=None):
     """입력한 주소를 먼저 해석하고 후속 질문에서도 그 기준점을 유지한다."""
-    from src.services.address_scope import resolve_address
+    from src.services.address_scope import resolve_address, ROAD, LOT
+    compact=re.sub(r'\s+','',question)
+    if any(word in compact for word in ('시스템프롬프트','프롬프트전문','API키값','환경변수값')):
+        return '내부 프롬프트나 비밀 설정값은 제공하지 않습니다. 상권·업종·자료에 관해 질문해 주세요.',None
+    if re.search(r'(?<![가-힣])(?:서울|부산|인천|광주|대전|울산|세종|제주|경산)(?:광역시|특별시|시)?(?=$|\s|에서|의|지역|에)',question) and not (ROAD.search(question) or LOT.search(question)):
+        return '현재 지원하는 대구 다섯 상권의 자료만 확인할 수 있습니다. 지원하지 않는 지역의 수치는 알 수 없습니다.',None
     reset = any(term in question for term in ('전체 범위', '전체범위', '지역 전체', '통합상권 전체', '지역 기준점', '상권 기준점'))
     if reset:
         state.pop('address_location', None)

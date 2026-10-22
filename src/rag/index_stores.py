@@ -71,7 +71,9 @@ def get_collection():
         model=EMBEDDING_MODEL,
         api_key=api_key,
         base_url=GMS_BASE_URL,
-        check_embedding_ctx_length=False
+        check_embedding_ctx_length=False,
+        request_timeout=45,
+        max_retries=1
     )
 
     collection = client.get_or_create_collection(

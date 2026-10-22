@@ -56,6 +56,11 @@ class AddressScopeTests(unittest.TestCase):
 
     def test_unknown_multiple_outside_address_never_uses_anchor(self):
         state = {}
+        self.ask('중앙대로 412-21 100m 카페',state)
+        _,report=self.ask('서울 중구 중앙대로 412-21 100m 카페',state)
+        self.assertIsNone(report)
+        _,report=self.ask('100m 이내는?',state)
+        self.assertIsNone(report)
         for question in ['없는길 99999 100m 카페', '서울 중구 중앙대로 412-21 카페',
                          '중앙대로 412-21과 종로 46-2 100m 카페']:
             text, report = self.ask(question, state)

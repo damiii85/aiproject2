@@ -12,9 +12,11 @@ from src.services.chat_controller import answer_question
 from src.services.pdf_evidence import report_data
 from src.services.region_analytics import distribution_rows, pdf_visuals, public_report
 from src.services.naver_map import render_map
-from src.ui.analytics import render_visual, bar_chart
+from src.ui.analytics import bar_chart
 from src.ui.styles import apply_styles, brand, page_title, apply_region_styles
 from src.ui.chat_layout import apply_chat_layout
+from src.ui.assistant_message import assistant_message, apply_answer_styles
+from src.services.region_search import search_regions
 
 st.set_page_config(page_title='SPOT CHECK · 데이터로 읽는 상권', page_icon=':material/location_on:', layout='wide', initial_sidebar_state='collapsed')
 apply_styles()
@@ -67,23 +69,12 @@ def source_content():
 
 
 def render_answer(message, key):
-    visual = message.get('visual')
-    if visual and visual.get('type') == 'overview':
-        render_visual(visual, key)
-        try:
-            background = report_data(visual['spot'])
-            st.markdown(background['interpretation'])
-            if background['metrics'].get('유동인구') is not None:
-                st.caption(f"PDF 일평균 유동인구 {background['metrics']['유동인구']:,}명 · 지정 상권 경계 · 2026.07 기준. 상권보고서.pdf 2·{background['page']}쪽, 기준연월 1·10쪽.")
-            else:
-                st.caption('상권보고서.pdf 3~5쪽의 도심 세부 구역 통계를 각각 사용합니다. 중복 가능성이 있어 합산하지 않습니다.')
-        except (OSError, ValueError, IndexError):
-            st.caption('PDF의 지역 배경 정보는 확인할 수 없습니다.')
-        with st.expander('업종 설명 · 지역 해석 · 출처 자세히 보기'):
-            st.markdown(message['content'])
+    if message.get('role') == 'assistant':
+        assistant_message(message, key)
     else:
-        render_visual(visual, key)
         st.markdown(message['content'])
+        if message.get('time'):
+            st.caption(message['time'])
 
 with st.container(key='global-header'):
     left, right = st.columns([1.2, 1], vertical_alignment='center')
@@ -124,14 +115,21 @@ if stage == 'region':
     with st.container(key='region-page'):
         st.html('<div class="region-title"><small>SPOT CHECK</small><h1>어떤 지역이 궁금하신가요?</h1><p>지역을 선택하면 바로 채팅으로 이어집니다.</p></div>')
         keyword = st.text_input('지역 검색', placeholder='도심 통합상권 / 수성못 / 삼덕동 / 동대구역 / 칠곡3지구 등 지역을 검색해보세요.', icon=':material/search:', key='region-search')
-        filtered = [s for s in spots if keyword.strip() in s['name'] or keyword.strip() in s['district']
-                    or any(keyword.strip() in c['name'] for c in s.get('components', []))]
+        matches = search_regions(keyword, spots)
+        filtered = [match['spot'] for match in matches]
         with st.container(key='region-grid'):
             for item in filtered:
                 with st.container(key='spot-card-' + item['id'], border=True):
                     if st.button(item['name'], key='select_' + item['id'], width='stretch'):
+                        match=next(match for match in matches if match['spot']['id']==item['id'])
+                        if match['categories']:
+                            names=' · '.join(category['name'] for category in match['categories'])
+                            st.session_state['pending_search_question']=f'{item["name"]}에서 {names} 업종을 분석해줘'
                         choose_spot(item['id'])
                     components = '<div class="region-components">동성로 · 대구역 · 반월당</div>' if item.get('components') else ''
+                    match=next(match for match in matches if match['spot']['id']==item['id'])
+                    if match['count'] is not None:
+                        components=f'<div class="region-components">조건 일치 업종 · API 수집본 {match["count"]:,}곳</div>'
                     pin = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M19 10c0 5-7 11-7 11S5 15 5 10a7 7 0 1 1 14 0Z"/><circle cx="12" cy="10" r="2.5"/></svg>'
                     st.html(f'<div class="region-card-content"><div class="region-card-top"><span class="region-pin" aria-hidden="true">{pin}</span><div class="region-card-label"><small>DAEGU · {escape(item["district"])}</small><strong>{escape(item["name"])}</strong></div><span class="region-arrow" aria-hidden="true">→</span></div>{components}<div class="region-tags"><span>상가 현황</span><span>지역 특성</span><span>교통</span></div></div>')
         if not filtered:
@@ -145,6 +143,7 @@ with workspace.container(key='workspace-controls'):
     workspace_view = st.segmented_control('화면 보기', ['채팅', '분석', '대화 목록'], default='채팅',
                                           key='workspace_view', label_visibility='collapsed', required=True)
 apply_chat_layout(workspace_view)
+apply_answer_styles()
 grid = workspace.container(key='workspace-grid')
 history, conversation, details = grid.columns([16, 54, 30], gap='medium')
 with history, st.container(key='conversation-nav'):
@@ -195,8 +194,6 @@ with conversation, st.container(key='conversation-panel', border=True):
         for index, message in enumerate(state['messages']):
             with st.chat_message(message['role'], avatar=':material/smart_toy:' if message['role'] == 'assistant' else ':material/person:'):
                 render_answer(message, f'{spot_id}-message-{index}')
-                if message.get('time'):
-                    st.caption(message['time'])
     composer = st.container(key='chat-composer')
     prompt = None
     with composer.container(horizontal=True, wrap=False, key='quick-prompts'):
@@ -205,22 +202,27 @@ with conversation, st.container(key='conversation-panel', border=True):
                 prompt = f'{spot["name"]}에서 {industry}를 하고 싶어요'
         if st.button('유동인구', key='quick_population'):
             prompt = f'{spot["name"]}의 유동인구는 몇 명이야?'
-    question = composer.chat_input('궁금한 내용을 자유롭게 질문해 주세요.', max_chars=3000) or prompt
+    question = composer.chat_input('궁금한 내용을 자유롭게 질문해 주세요.', max_chars=3000) or prompt or st.session_state.pop('pending_search_question','')
     if question:
         now = datetime.now(ZoneInfo('Asia/Seoul'))
         state['messages'].append({'role': 'user', 'content': question, 'time': now.strftime('%H:%M')})
-        with st.spinner('지역 데이터와 출처를 살펴보고 있어요…'):
+        with st.status('데이터 검색 중', expanded=False) as answer_status:
             try:
-                answer, report = answer_question(spot_id, question, state, stores, metadata, 1000)
+                answer, report = answer_question(spot_id, question, state, stores, metadata, 1000,
+                    progress=lambda label: answer_status.update(label=label))
                 report = public_report(report)
                 if report:
                     report['created_at'] = now.strftime('%Y.%m.%d %H:%M')
                     state['reports'].append(report)
                 visual = report or pdf_visuals(spot_id, question, answer)
+                answer_status.update(label='분석 완료',state='complete')
             except Exception as error:
-                answer = str(error) if isinstance(error, ValueError) else '자료에서 답을 확인하지 못했습니다. 알 수 없는 내용은 추측하지 않습니다.'
+                answer = '자료에서 답을 확인하지 못했습니다. 지역·업종·반경과 연결 설정을 확인한 뒤 다시 질문해 주세요. 알 수 없는 내용은 추측하지 않습니다.'
                 visual = None
-        state['messages'].append({'role': 'assistant', 'content': answer, 'visual': visual, 'time': now.strftime('%H:%M')})
+                answer_status.update(label='답변을 확인할 수 없습니다. 잠시 후 다시 질문해 주세요.',state='error')
+        rag=state.get('rag_last',{})
+        state['messages'].append({'role': 'assistant', 'content': answer, 'visual': visual, 'time': now.strftime('%H:%M'),
+                                  'citations':rag.get('citations',[]),'rag_status':rag.get('statuses',[])})
         if 'title' not in state:
             names = ', '.join(c['name'] for c in state.get('request', {}).get('categories', []))
             state['title'] = spot['name'] + ' · ' + (names + ' 현황' if names else '지역 통계')

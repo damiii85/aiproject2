@@ -27,7 +27,7 @@ class AllSpotsUI(unittest.TestCase):
                 self.assertEqual(report['competitor_count'], int((stores.indsSclsNm == '카페').sum()))
                 self.assertNotIn('candidates', report)
                 self.assertNotIn('competitors', report)
-                self.assertTrue(any(m.label == '전체 대비 비중' for m in app.metric))
+                self.assertTrue(any(m.label.endswith('전체 대비 비중') for m in app.metric))
                 self.assertTrue(app.get('vega_lite_chart'))
                 app.chat_input[0].set_value('어디에 열면 좋아? 후보 top3 추천해줘').run()
                 self.assertFalse(app.exception)

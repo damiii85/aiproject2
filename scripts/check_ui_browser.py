@@ -37,7 +37,7 @@ with sync_playwright() as p:
     page.screenshot(path=str(output/'15_radius_200m.png'),full_page=True)
     prompt.fill('반월당의 유동인구는 몇 명이야?')
     prompt.press('Enter')
-    page.get_by_text('18,012명/일',exact=False).last.wait_for(timeout=30000)
+    page.get_by_text('18,012명/일',exact=False).filter(visible=True).last.wait_for(timeout=30000)
     page.screenshot(path=str(output/'15_subregion_pdf.png'),full_page=True)
     assert page.locator('[data-testid="stException"]').count()==0
     assert page.evaluate('document.documentElement.scrollWidth <= window.innerWidth'),'Desktop horizontal overflow'

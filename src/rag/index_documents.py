@@ -18,6 +18,7 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 from src.collectors.document_collector import collect_document, search_documents
 from src.rag.document_prompts import QUERY_PROMPT, SELECTION_PROMPT
+from src.rag.settings import load_settings
 
 load_dotenv(BASE_DIR / ".env")
 DB_PATH = BASE_DIR / "data/chroma_db"
@@ -33,9 +34,9 @@ def gms_options():
         "GMS_BASE_URL", "https://gms.ssafy.io/gmsapi/api.openai.com/v1/")}
 
 
-def get_llm():
+def get_llm(timeout=45):
     return ChatOpenAI(model=os.getenv("GMS_LLM_MODEL", "gpt-4o-mini"),
-                      temperature=0, timeout=45, max_retries=1, **gms_options())
+                      temperature=0, timeout=timeout, max_retries=1, **gms_options())
 
 
 def get_embeddings():
@@ -97,7 +98,10 @@ def select_candidates(question, candidates, min_score=0.6, llm=None):
     return sorted(selected.values(), key=lambda item: item["relevance"], reverse=True)
 
 
-def split_document(text, chunk_size=1000, chunk_overlap=200):
+def split_document(text, chunk_size=None, chunk_overlap=None):
+    settings=load_settings() if chunk_size is None or chunk_overlap is None else {}
+    chunk_size=settings.get('chunk_size') if chunk_size is None else chunk_size
+    chunk_overlap=settings.get('chunk_overlap') if chunk_overlap is None else chunk_overlap
     if chunk_size < 50 or not 0 <= chunk_overlap < chunk_size:
         raise ValueError("chunk-size는 50 이상, overlap은 0 이상 chunk-size 미만이어야 합니다.")
     splitter = RecursiveCharacterTextSplitter(
@@ -118,7 +122,10 @@ def get_collection(create=False, db_path=DB_PATH):
         raise ValueError("외부 문서가 아직 색인되지 않았습니다. 먼저 --url 또는 --question으로 색인해 주세요.") from None
 
 
-def index_document(document, collection, embeddings, chunk_size=1000, chunk_overlap=200):
+def index_document(document, collection, embeddings, chunk_size=None, chunk_overlap=None):
+    settings=load_settings() if chunk_size is None or chunk_overlap is None else {}
+    chunk_size=settings.get('chunk_size') if chunk_size is None else chunk_size
+    chunk_overlap=settings.get('chunk_overlap') if chunk_overlap is None else chunk_overlap
     chunks = split_document(document["text"], chunk_size, chunk_overlap)
     if not chunks:
         raise ValueError("색인할 본문이 없습니다.")
@@ -126,7 +133,8 @@ def index_document(document, collection, embeddings, chunk_size=1000, chunk_over
     model = str(getattr(embeddings, "model", "unknown"))
     content_hash = hashlib.sha256(document["text"].encode("utf-8")).hexdigest()
     revision = hashlib.sha256(json.dumps([
-        content_hash, chunk_size, chunk_overlap, model, "splitter-v1"
+        content_hash, chunk_size, chunk_overlap, model, "splitter-v1",
+        {field: document[field] for field in ('region_id','source_type','page','reference','corpus_version') if field in document}
     ]).encode()).hexdigest()
     ids = [f"{doc_id}:{revision}:{i}" for i in range(len(chunks))]
     existing = collection.get(where={"document_id": doc_id}, include=["metadatas"])
@@ -142,6 +150,11 @@ def index_document(document, collection, embeddings, chunk_size=1000, chunk_over
             "robots_note": document["robots_note"], "content_type": document["content_type"],
             "chunk_size": chunk_size, "chunk_overlap": chunk_overlap, "embedding_model": model,
         } for i, _ in batch]
+        for (i, _), metadata in zip(batch, metadatas):
+            metadata['chunk_id'] = ids[i]
+            for field in ('source_type','region_id','region_name','page','reference','category_level','category_name','corpus_hash','corpus_version'):
+                if field in document:
+                    metadata[field] = document[field]
         vectors = embeddings.embed_documents([text for _, text in batch])
         collection.upsert(ids=[ids[i] for i, _ in batch],
                           documents=[text for _, text in batch],
@@ -179,7 +192,7 @@ def run(args):
         for i, result in enumerate(results, 1):
             meta = result["metadata"]
             print(f"[{i}] {meta['title']} | {meta['source']} | 거리 {result['distance']:.4f}")
-            print(f"출처: {meta['url']}\n수집일: {meta['collected_at']}")
+            print(f"출처: {meta.get('source',meta['url'])}\n수집일: {meta['collected_at']}")
             print(result["text"] + "\n")
         return
     if args.url:
@@ -193,8 +206,11 @@ def run(args):
         queries = generate_queries(args.question, context)
         print(json.dumps(queries, ensure_ascii=False))
         print("[2/4] 외부 문서 검색 및 관련성 선별")
-        candidates = select_candidates(args.question, search_documents(queries, args.candidates), args.min_score)
-        audit = {"question": args.question, "queries": queries, "selected": candidates}
+        all_candidates = search_documents(queries, args.candidates)
+        candidates = select_candidates(args.question, all_candidates, args.min_score)
+        selected_ids={item['id'] for item in candidates}
+        audit = {"question": args.question, "queries": queries, "candidates":all_candidates,
+                 "selected": candidates,"rejected":[item for item in all_candidates if item['id'] not in selected_ids]}
         RAW_PATH.mkdir(parents=True, exist_ok=True)
         (RAW_PATH / "last_selection.json").write_text(json.dumps(audit, ensure_ascii=False, indent=2), encoding="utf-8")
         candidates = candidates[:args.max_documents]
@@ -227,6 +243,7 @@ def run(args):
 
 
 def main():
+    settings=load_settings()
     parser = argparse.ArgumentParser(description="SPOT CHECK RAG 2 외부 문서 수집·색인·검색")
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--question", help="자동 웹 검색에 사용할 창업 질문")
@@ -234,9 +251,9 @@ def main():
     mode.add_argument("--search", help="저장된 외부 문서 벡터 검색")
     parser.add_argument("--store-context", help="검색어 생성에 사용할 상가·분석 정보 JSON 파일")
     parser.add_argument("--collect-only", action="store_true", help="본문 수집까지만 실행")
-    parser.add_argument("--chunk-size", type=int, default=1000)
-    parser.add_argument("--chunk-overlap", type=int, default=200)
-    parser.add_argument("--top-k", type=int, default=5)
+    parser.add_argument("--chunk-size", type=int, default=settings['chunk_size'])
+    parser.add_argument("--chunk-overlap", type=int, default=settings['chunk_overlap'])
+    parser.add_argument("--top-k", type=int, default=settings['top_k_documents'])
     parser.add_argument("--max-distance", type=float, help="벡터 거리 상한. 데이터별 검증 후 설정")
     parser.add_argument("--candidates", type=int, default=5)
     parser.add_argument("--max-documents", type=int, default=3)

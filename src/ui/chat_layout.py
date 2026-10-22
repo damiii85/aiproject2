@@ -39,7 +39,8 @@ def apply_chat_layout(view='채팅'):
     .st-key-chat-composer textarea{max-height:128px!important;overflow-y:auto!important;overflow-wrap:anywhere}
     .st-key-quick-prompts{min-width:0;max-width:100%;overflow-x:auto;flex-wrap:nowrap!important;padding-bottom:3px;scrollbar-width:thin;overscroll-behavior-x:contain}
     .st-key-quick-prompts>[data-testid="stElementContainer"]{flex:0 0 auto!important;width:auto!important}
-    .st-key-chat-feed [data-testid="stChatMessage"]{align-self:flex-start;width:fit-content;max-width:94%;min-width:0;flex:0 0 auto;overflow-wrap:anywhere}
+    .st-key-chat-feed [data-testid^="stChatMessageAvatar"]{display:none!important}
+    .st-key-chat-feed [data-testid="stChatMessage"]{gap:0;padding:12px 16px;align-self:flex-start;width:fit-content;max-width:94%;min-width:0;flex:0 0 auto;overflow-wrap:anywhere}
     .st-key-chat-feed [data-testid="stChatMessage"]:has([aria-label="Chat message from user"]){align-self:flex-end;margin-left:auto;margin-right:0;width:fit-content;max-width:84%}
     .st-key-chat-feed [data-testid="stChatMessage"]:has([aria-label="Chat message from user"]){background:linear-gradient(120deg,#086aff,#2d7cff);color:white;flex-direction:row-reverse}
     .st-key-chat-feed [data-testid="stChatMessage"]:has([aria-label="Chat message from user"]) p{color:white}

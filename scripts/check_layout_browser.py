@@ -11,7 +11,7 @@ with sync_playwright() as p:
     browser=p.chromium.launch(executable_path=r'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe',headless=True)
     page=browser.new_page(viewport={'width':1550,'height':900})
     page.goto(args.url)
-    page.get_by_role('button',name='분석 시작하기',exact=True).click()
+    page.get_by_role('button',name='분석 시작하기').click()
     page.get_by_role('button',name='대구 도심 통합상권',exact=True).click()
     prompt=page.get_by_placeholder('궁금한 내용을 자유롭게 질문해 주세요.')
     prompt.wait_for()
@@ -34,7 +34,7 @@ with sync_playwright() as p:
     page.get_by_text('627곳',exact=False).first.wait_for()
     for text,expected in [('100미터 이내 유사 업계는?','19곳'),('200m 이내는?','42곳'),('반월당의 유동인구는 몇 명이야?','18,012명/일')]:
         prompt.fill(text);prompt.press('Enter')
-        page.get_by_text(expected,exact=False).last.wait_for(timeout=30000)
+        page.get_by_text(expected,exact=False).filter(visible=True).last.wait_for(timeout=30000)
     page.wait_for_timeout(1200)
     panels()
     feed=page.locator('.st-key-chat-feed')
@@ -59,7 +59,7 @@ with sync_playwright() as p:
         fits()
         if width==1024:
             page.locator('.st-key-workspace_view').get_by_text('대화 목록',exact=True).click()
-            page.get_by_role('button',name='새 대화하기',exact=True).wait_for(state='visible')
+            page.get_by_role('button',name='새 대화하기').wait_for(state='visible')
             assert right.is_visible()
             page.locator('.st-key-workspace_view').get_by_text('채팅',exact=True).click()
             prompt.wait_for(state='visible')
@@ -71,7 +71,7 @@ with sync_playwright() as p:
             assert not page.locator('.st-key-conversation-panel').is_visible()
             page.screenshot(path=str(out/'16_mobile_analysis.png'))
             page.locator('.st-key-workspace_view').get_by_text('대화 목록',exact=True).click()
-            page.get_by_role('button',name='새 대화하기',exact=True).wait_for(state='visible')
+            page.get_by_role('button',name='새 대화하기').wait_for(state='visible')
             page.locator('.st-key-workspace_view').get_by_text('채팅',exact=True).click()
             prompt.wait_for(state='visible')
             assert users.count()==4
@@ -80,9 +80,13 @@ with sync_playwright() as p:
             prompt.fill('')
             page.screenshot(path=str(out/'16_mobile_chat.png'))
             page.locator('.st-key-workspace_view').get_by_text('대화 목록',exact=True).click()
-            page.get_by_role('button',name='새 대화하기',exact=True).click()
+            page.get_by_role('button',name='새 대화하기').click()
             page.get_by_role('button',name='대구 도심 통합상권',exact=True).click()
+            # 지역 선택 후에는 모바일 기본 화면이 채팅으로 돌아간다.
+            page.locator('.st-key-workspace_view').get_by_text('대화 목록',exact=True).click()
             page.locator('.st-key-archive_0 button').click()
+            # 복원 rerun이 완료되기 전에 탭 전환 이벤트로 중단하지 않는다.
+            expect(users).to_have_count(4,timeout=10000)
             page.locator('.st-key-workspace_view').get_by_text('채팅',exact=True).click()
             prompt.wait_for(state='visible')
             expect(users).to_have_count(4,timeout=10000)
