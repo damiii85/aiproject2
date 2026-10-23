@@ -1,6 +1,7 @@
 """기존 CSV·지정 PDF를 RAG 문서로 구성하고 출처·지역을 보존한다."""
 import hashlib
 import json
+from functools import lru_cache
 from pathlib import Path
 
 from pypdf import PdfReader
@@ -13,11 +14,17 @@ from src.services.spot_catalog import load_spots, data_paths
 MANIFEST = BASE_DIR / 'data/processed/rag_inventory.json'
 
 
+@lru_cache(maxsize=64)
+def _file_digest(path, size, modified):
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
 def corpus_signature():
     paths = [PDF_PATH, PDF_PATH.with_name('active_report.source.json'), BASE_DIR/'config/daegu_spots.json']
     for spot in load_spots():
         paths.extend(data_paths(spot['id']))
-    state = [(str(p.relative_to(BASE_DIR)), p.stat().st_size, p.stat().st_mtime_ns) for p in paths if p.exists()]
+    # ZIP extraction changes timestamps; content hashes remain portable.
+    state = [(str(p.relative_to(BASE_DIR)), _file_digest(str(p), p.stat().st_size, p.stat().st_mtime_ns)) for p in paths if p.exists()]
     return hashlib.sha256(json.dumps(state, ensure_ascii=True).encode()).hexdigest()
 
 
@@ -73,5 +80,6 @@ def store_documents():
 
 def inventory():
     import chromadb
-    client=chromadb.PersistentClient(path=str(BASE_DIR/'data/chroma_db'))
+    from src.rag.portable_db import chroma_path
+    client=chromadb.PersistentClient(path=str(chroma_path()))
     return {collection.name:collection.count() for collection in client.list_collections()}

@@ -43,4 +43,4 @@
 - 기존 venv와 달리 별도 `.venv`는 요구서 필수 버전 14개가 모두 일치한다. `requirements.txt`와 `dependency_versions.md`에 기록했다. Streamlit 1.62 차트 설명·컴포넌트 등록 호환성을 수정하고 지정 환경 72개 회귀 및 실제 GMS 검색·모델 호출을 검증했다. 다른 교육생의 환경 검토를 대신한 것은 아니다.
 - 제출 전 상호 검토는 사용자가 미실시라고 확인했다. 데이터 이용 조건과 새 환경 재현은 체크리스트의 미확인 상태를 유지한다.
 
-최종 실행 증거는 `docs/rag_test_results.md`, 설계는 `docs/rag_pipeline.md`, 점검표는 `docs/submission_checklist.md` 참조.
+최종 실행 증거는 `docs/rag_test_results.md`, 설계는 `docs/rag_pipeline.md`, 점검표는 `output/submission_checklist.md` 참조.

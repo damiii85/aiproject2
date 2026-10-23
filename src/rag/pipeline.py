@@ -7,7 +7,7 @@ from typing import Any, TypedDict
 
 from langgraph.graph import StateGraph, START, END
 
-from src.rag.collection_flow import collect_candidates
+from src.rag.collection_flow import collect_candidates, index_selected
 from src.rag.generation import generate_quotes, cite_answer
 from src.rag.index_documents import get_llm
 from src.rag.retrieval import retrieve
@@ -85,7 +85,10 @@ def retrieve_node(state):
         except Exception:
             statuses.append('문서 후보를 확인할 수 없습니다. 검증된 수집본만 사용합니다.')
         try:
-            retrieved=retrieve(state['question'],region_id,categories,settings=settings)
+            selection=index_selected(audit,settings)
+            audit.update(selection)
+            retrieved=retrieve(state['question'],region_id,categories,settings=settings,
+                               selected_document_ids=selection['selected_document_ids'])
             statuses.extend(retrieved['statuses'])
         except Exception:
             retrieved={'rag1':[],'rag2':[],'evidence':[]}
@@ -134,7 +137,7 @@ def run(spot_id,question,session,stores,metadata,radius,location,legacy,progress
             'metadata':metadata,'radius':radius,'location':location,'legacy':legacy,'progress':progress})
         session['rag_last']={'trace':dict(result['trace'],total_seconds=round(time.perf_counter()-started,6)),
             'citations':result['citations'],'statuses':result['statuses'],
-            'collection_audit':{k:result['collection_audit'].get(k) for k in ('queries','prompt1_executed','prompt2_executed','cache_hit')}}
+            'collection_audit':{k:result['collection_audit'].get(k) for k in ('queries','prompt1_executed','prompt2_executed','cache_hit','selected_document_ids','reused_chunks','embedded_chunks','excluded_candidates')}}
         return result['answer'],result['report']
     finally:
         ACTIVE.reset(token)

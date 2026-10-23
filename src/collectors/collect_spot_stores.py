@@ -17,7 +17,7 @@ import pandas as pd
 import requests
 from dotenv import load_dotenv
 
-from collect_stores import unpack, URL
+from src.collectors.store_api import unpack, URL
 from src.services.spot_catalog import get_spot, load_spots, data_paths, inventory
 
 

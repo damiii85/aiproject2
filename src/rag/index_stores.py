@@ -7,6 +7,7 @@ import pandas as pd
 import chromadb
 from dotenv import load_dotenv
 from langchain_openai import OpenAIEmbeddings
+from src.rag.portable_db import chroma_path
 
 
 # ==========================================
@@ -22,12 +23,6 @@ CSV_PATH = (
     / "data"
     / "raw"
     / "dongseongro_stores.csv"
-)
-
-DB_PATH = (
-    BASE_DIR
-    / "data"
-    / "chroma_db"
 )
 
 COLLECTION_NAME = "store_metadata"
@@ -58,13 +53,14 @@ def get_collection():
             ".env 파일에 GMS_API_KEY를 설정해 주세요."
         )
 
-    DB_PATH.mkdir(
+    database_path = chroma_path()
+    database_path.mkdir(
         parents=True,
         exist_ok=True
     )
 
     client = chromadb.PersistentClient(
-        path=str(DB_PATH)
+        path=str(database_path)
     )
 
     embeddings = OpenAIEmbeddings(
@@ -318,7 +314,7 @@ def index_stores(limit=200):
     print("\n===== RAG 1 색인 완료 =====")
     print(f"컬렉션: {COLLECTION_NAME}")
     print(f"총 저장 건수: {collection.count()}")
-    print(f"저장 경로: {DB_PATH}")
+    print(f"저장 경로: {chroma_path()}")
 
 
 # ==========================================

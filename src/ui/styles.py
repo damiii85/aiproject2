@@ -67,7 +67,13 @@ def apply_styles():
     .st-key-chat-feed [data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarUser"]){background:linear-gradient(120deg,#086aff,#2d7cff);color:white;margin-left:12%;max-width:88%;flex-direction:row-reverse}
     .st-key-chat-feed [data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarUser"]) p{color:white}
     .st-key-chat-feed [data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarUser"]) [data-testid="stCaptionContainer"] p{color:#dceaff}
-    [data-testid="stChatInput"]{background:white;border:1px solid #6ba1ff;border-radius:17px;min-height:60px;box-shadow:0 3px 13px #1364e608}
+    .st-key-chat-composer [data-testid="stChatInput"],
+    .st-key-chat-composer [data-testid="stChatInput"]:focus-within{background:#edf3fc;border:0!important;outline:none!important;border-radius:17px;min-height:60px;box-shadow:none!important}
+    .st-key-chat-composer [data-testid="stChatInput"] textarea,
+    .st-key-chat-composer [data-testid="stChatInput"] textarea:focus,
+    .st-key-chat-composer [data-testid="stChatInput"] > div,
+    .st-key-chat-composer [data-testid="stChatInput"] > div:focus-within,
+    .st-key-chat-composer [data-testid="stChatInput"] [data-baseweb="textarea"]{border:0!important;outline:none!important;box-shadow:none!important}
     .st-key-quick-prompts{gap:6px}.st-key-quick-prompts button{border:1px solid #e3eafa;border-radius:25px;background:white;font-size:12px;min-height:32px;padding:4px 12px}
     .st-key-insights-panel [data-testid="stMetric"]{padding:12px;background:#f6f9ff;border:1px solid #e8eff9;border-radius:12px;min-height:91px}
     [data-testid="stMetricValue"]{font-size:22px!important;font-weight:800;color:#153567}[data-testid="stMetricLabel"]{font-size:12px;color:#7a8daa}

@@ -55,6 +55,7 @@ def hero_image():
 
 def navigate(stage):
     st.session_state['ui_stage'] = stage
+    selection_screen.empty()
     st.rerun()
 
 def choose_spot(region_id):
@@ -89,20 +90,25 @@ with st.container(key='global-header'):
         with links[2].popover('데이터 출처', width='stretch'):
             source_content()
 
+selection_screen = st.empty()
 stage = st.session_state['ui_stage']
+# Stage-scoped visibility prevents stale blocks from appearing during a rerun.
+hidden_screen = '.st-key-region-page,.st-key-hero,.st-key-home-features' if stage == 'chat' else '.st-key-workspace'
+st.html(f'<style>{hidden_screen}{{display:none!important}}</style>')
 if stage == 'home':
-    st.html('<style>.st-key-hero{background-image:linear-gradient(90deg,rgba(255,255,255,.3),transparent 65%),url("data:image/png;base64,' + hero_image() + '");}</style>')
-    with st.container(key='hero'):
-        st.html('<div class="eyebrow">DATA FOR YOUR NEXT CHAPTER</div>')
-        st.html('<h1>좋은 시작은,<br>상권을 아는 것부터.</h1>')
-        st.markdown('대구의 상권을 데이터로 읽어보세요.\n\n궁금한 업종부터 지역의 특성까지,\n\n**SPOT CHECK가 함께 살펴봅니다.**')
-        if st.button('분석 시작하기', icon=':material/arrow_forward:', type='primary', key='start'):
-            navigate('region')
-        st.caption('대구 도심 통합상권 · 수성못 · 삼덕동 · 동대구역 · 칠곡3지구')
-    with st.container(horizontal=True, key='home-features'):
-        for number, title, text in [('01', '지역을 고르세요', '대구의 다섯 상권에서 관심 지역을 선택하세요.'), ('02', '편하게 질문하세요', '궁금한 업종과 통계를 대화로 이야기해 주세요.'), ('03', '숫자를 한눈에', '확인된 통계와 출처를 그래프로 살펴보세요.')]:
-            st.html(f'<div class="feature"><small>{number}</small><h3>{title}</h3><p>{text}</p></div>')
-    st.stop()
+    with selection_screen.container():
+        st.html('<style>.st-key-hero{background-image:linear-gradient(90deg,rgba(255,255,255,.3),transparent 65%),url("data:image/png;base64,' + hero_image() + '");}</style>')
+        with st.container(key='hero'):
+            st.html('<div class="eyebrow">DATA FOR YOUR NEXT CHAPTER</div>')
+            st.html('<h1>좋은 시작은,<br>상권을 아는 것부터.</h1>')
+            st.markdown('대구의 상권을 데이터로 읽어보세요.\n\n궁금한 업종부터 지역의 특성까지,\n\n**SPOT CHECK가 함께 살펴봅니다.**')
+            if st.button('분석 시작하기', icon=':material/arrow_forward:', type='primary', key='start'):
+                navigate('region')
+            st.caption('대구 도심 통합상권 · 수성못 · 삼덕동 · 동대구역 · 칠곡3지구')
+        with st.container(horizontal=True, key='home-features'):
+            for number, title, text in [('01', '지역을 고르세요', '대구의 다섯 상권에서 관심 지역을 선택하세요.'), ('02', '편하게 질문하세요', '궁금한 업종과 통계를 대화로 이야기해 주세요.'), ('03', '숫자를 한눈에', '확인된 통계와 출처를 그래프로 살펴보세요.')]:
+                st.html(f'<div class="feature"><small>{number}</small><h3>{title}</h3><p>{text}</p></div>')
+        st.stop()
 
 try:
     csv_path, meta_path = data_paths(spot_id)
@@ -111,32 +117,36 @@ except (ValueError, OSError):
     stores, metadata = None, {}
 
 if stage == 'region':
-    apply_region_styles()
-    with st.container(key='region-page'):
-        st.html('<div class="region-title"><small>SPOT CHECK</small><h1>어떤 지역이 궁금하신가요?</h1><p>지역을 선택하면 바로 채팅으로 이어집니다.</p></div>')
-        keyword = st.text_input('지역 검색', placeholder='도심 통합상권 / 수성못 / 삼덕동 / 동대구역 / 칠곡3지구 등 지역을 검색해보세요.', icon=':material/search:', key='region-search')
-        matches = search_regions(keyword, spots)
-        filtered = [match['spot'] for match in matches]
-        with st.container(key='region-grid'):
-            for item in filtered:
-                with st.container(key='spot-card-' + item['id'], border=True):
-                    if st.button(item['name'], key='select_' + item['id'], width='stretch'):
+    with selection_screen.container():
+        apply_region_styles()
+        with st.container(key='region-page'):
+            st.html('<div class="region-title"><small>SPOT CHECK</small><h1>어떤 지역이 궁금하신가요?</h1><p>지역을 선택하면 바로 채팅으로 이어집니다.</p></div>')
+            keyword = st.text_input('지역 검색', placeholder='도심 통합상권 / 수성못 / 삼덕동 / 동대구역 / 칠곡3지구 등 지역을 검색해보세요.', icon=':material/search:', key='region-search')
+            matches = search_regions(keyword, spots)
+            filtered = [match['spot'] for match in matches]
+            with st.container(key='region-grid'):
+                for item in filtered:
+                    with st.container(key='spot-card-' + item['id'], border=True):
+                        if st.button(item['name'], key='select_' + item['id'], width='stretch'):
+                            match=next(match for match in matches if match['spot']['id']==item['id'])
+                            if match['categories']:
+                                names=' · '.join(category['name'] for category in match['categories'])
+                                st.session_state['pending_search_question']=f'{item["name"]}에서 {names} 업종을 분석해줘'
+                            choose_spot(item['id'])
+                        components = '<div class="region-components">동성로 · 대구역 · 반월당</div>' if item.get('components') else ''
                         match=next(match for match in matches if match['spot']['id']==item['id'])
-                        if match['categories']:
-                            names=' · '.join(category['name'] for category in match['categories'])
-                            st.session_state['pending_search_question']=f'{item["name"]}에서 {names} 업종을 분석해줘'
-                        choose_spot(item['id'])
-                    components = '<div class="region-components">동성로 · 대구역 · 반월당</div>' if item.get('components') else ''
-                    match=next(match for match in matches if match['spot']['id']==item['id'])
-                    if match['count'] is not None:
-                        components=f'<div class="region-components">조건 일치 업종 · API 수집본 {match["count"]:,}곳</div>'
-                    pin = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M19 10c0 5-7 11-7 11S5 15 5 10a7 7 0 1 1 14 0Z"/><circle cx="12" cy="10" r="2.5"/></svg>'
-                    st.html(f'<div class="region-card-content"><div class="region-card-top"><span class="region-pin" aria-hidden="true">{pin}</span><div class="region-card-label"><small>DAEGU · {escape(item["district"])}</small><strong>{escape(item["name"])}</strong></div><span class="region-arrow" aria-hidden="true">→</span></div>{components}<div class="region-tags"><span>상가 현황</span><span>지역 특성</span><span>교통</span></div></div>')
-        if not filtered:
-            st.info('현재 지원하는 다섯 지역에서 선택해 주세요.')
-        if st.button('처음으로', icon=':material/arrow_back:', key='region-home'):
-            navigate('home')
-    st.stop()
+                        if match['count'] is not None:
+                            components=f'<div class="region-components">조건 일치 업종 · API 수집본 {match["count"]:,}곳</div>'
+                        pin = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M19 10c0 5-7 11-7 11S5 15 5 10a7 7 0 1 1 14 0Z"/><circle cx="12" cy="10" r="2.5"/></svg>'
+                        st.html(f'<div class="region-card-content"><div class="region-card-top"><span class="region-pin" aria-hidden="true">{pin}</span><div class="region-card-label"><small>DAEGU · {escape(item["district"])}</small><strong>{escape(item["name"])}</strong></div><span class="region-arrow" aria-hidden="true">→</span></div>{components}<div class="region-tags"><span>상가 현황</span><span>지역 특성</span><span>교통</span></div></div>')
+            if not filtered:
+                st.info('현재 지원하는 다섯 지역에서 선택해 주세요.')
+            if st.button('처음으로', icon=':material/arrow_back:', key='region-home'):
+                navigate('home')
+        st.stop()
+
+# Clear selection cards before emitting any chat elements.
+selection_screen.empty()
 
 workspace = st.container(key='workspace')
 with workspace.container(key='workspace-controls'):
@@ -206,23 +216,29 @@ with conversation, st.container(key='conversation-panel', border=True):
     if question:
         now = datetime.now(ZoneInfo('Asia/Seoul'))
         state['messages'].append({'role': 'user', 'content': question, 'time': now.strftime('%H:%M')})
-        with st.status('데이터 검색 중', expanded=False) as answer_status:
-            try:
-                answer, report = answer_question(spot_id, question, state, stores, metadata, 1000,
-                    progress=lambda label: answer_status.update(label=label))
-                report = public_report(report)
-                if report:
-                    report['created_at'] = now.strftime('%Y.%m.%d %H:%M')
-                    state['reports'].append(report)
-                visual = report or pdf_visuals(spot_id, question, answer)
-                answer_status.update(label='분석 완료',state='complete')
-            except Exception as error:
-                answer = '자료에서 답을 확인하지 못했습니다. 지역·업종·반경과 연결 설정을 확인한 뒤 다시 질문해 주세요. 알 수 없는 내용은 추측하지 않습니다.'
-                visual = None
-                answer_status.update(label='답변을 확인할 수 없습니다. 잠시 후 다시 질문해 주세요.',state='error')
-        rag=state.get('rag_last',{})
-        state['messages'].append({'role': 'assistant', 'content': answer, 'visual': visual, 'time': now.strftime('%H:%M'),
-                                  'citations':rag.get('citations',[]),'rag_status':rag.get('statuses',[])})
+        with feed.chat_message('user', avatar=':material/person:'):
+            render_answer(state['messages'][-1], f'{spot_id}-message-{len(state["messages"])-1}')
+        with feed.chat_message('assistant', avatar=':material/smart_toy:'):
+            loading = st.empty()
+            with loading.status('데이터 검색 중', expanded=False) as answer_status:
+                try:
+                    answer, report = answer_question(spot_id, question, state, stores, metadata, 1000,
+                        progress=lambda label: answer_status.update(label=label))
+                    report = public_report(report)
+                    if report:
+                        report['created_at'] = now.strftime('%Y.%m.%d %H:%M')
+                        state['reports'].append(report)
+                    visual = report or pdf_visuals(spot_id, question, answer)
+                    answer_status.update(label='분석 완료',state='complete')
+                except Exception:
+                    answer = '자료에서 답을 확인하지 못했습니다. 지역·업종·반경과 연결 설정을 확인한 뒤 다시 질문해 주세요. 알 수 없는 내용은 추측하지 않습니다.'
+                    visual = None
+                    answer_status.update(label='답변을 확인할 수 없습니다. 잠시 후 다시 질문해 주세요.',state='error')
+            rag=state.get('rag_last',{})
+            state['messages'].append({'role': 'assistant', 'content': answer, 'visual': visual, 'time': now.strftime('%H:%M'),
+                                      'citations':rag.get('citations',[]),'rag_status':rag.get('statuses',[])})
+            loading.empty()
+            render_answer(state['messages'][-1], f'{spot_id}-message-{len(state["messages"])-1}')
         if 'title' not in state:
             names = ', '.join(c['name'] for c in state.get('request', {}).get('categories', []))
             state['title'] = spot['name'] + ' · ' + (names + ' 현황' if names else '지역 통계')

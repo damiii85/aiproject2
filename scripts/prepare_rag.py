@@ -11,11 +11,12 @@ from src.rag.index_documents import index_document, split_document
 from src.rag.embeddings import get_embeddings
 from src.rag.knowledge import pdf_documents, store_documents, corpus_signature, inventory, MANIFEST
 from src.rag.settings import BASE_DIR, load_settings
+from src.rag.portable_db import chroma_path
 
 
 def prepare():
     settings=load_settings()
-    client=chromadb.PersistentClient(path=str(BASE_DIR/'data/chroma_db'))
+    client=chromadb.PersistentClient(path=str(chroma_path()))
     embeddings=get_embeddings()
     version=corpus_signature()+':'+embeddings.model
     result={'corpus_version':version,'settings':settings,'collections':{},'started_at':time.strftime('%Y-%m-%dT%H:%M:%S%z')}

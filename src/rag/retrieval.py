@@ -9,11 +9,12 @@ from src.rag.embeddings import get_embeddings
 from src.rag.knowledge import corpus_signature
 from src.rag.settings import BASE_DIR, load_settings
 from src.services.spot_catalog import get_spot
+from src.rag.portable_db import chroma_path
 
 
 @lru_cache(maxsize=1)
 def client():
-    return chromadb.PersistentClient(path=str(BASE_DIR/'data/chroma_db'))
+    return chromadb.PersistentClient(path=str(chroma_path()))
 
 
 def canonical_region(region_id):
@@ -40,7 +41,7 @@ def merge_evidence(*groups):
     return result
 
 
-def retrieve(question,region_id,categories=None,settings=None,db_client=None,embeddings=None):
+def retrieve(question,region_id,categories=None,settings=None,db_client=None,embeddings=None,selected_document_ids=None):
     settings=settings or load_settings()
     provided_embeddings=embeddings is not None
     embeddings=embeddings or get_embeddings(settings)
@@ -57,6 +58,11 @@ def retrieve(question,region_id,categories=None,settings=None,db_client=None,emb
         try:
             collection=db_client.get_collection(name)
             filters=list(base)
+            if name=='external_documents' and selected_document_ids is not None:
+                if not selected_document_ids:
+                    groups[name]=[]
+                    continue
+                filters.append({'document_id': {'$in': selected_document_ids}})
             if name=='store_metadata' and categories:
                 conditions=[{'$and':[{'category_level':c['level']},{'category_name':c['name']}]} for c in categories]
                 filters.append(conditions[0] if len(conditions)==1 else {'$or':conditions})

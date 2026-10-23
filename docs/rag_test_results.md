@@ -1,5 +1,15 @@
 # 실행 및 테스트 결과표
 
+## GPT-6 Luna 전환 검증 (2026-10-23)
+
+- 기본 생성 모델을 `gpt-6-luna`로 변경하고 GMS Responses API로 연결했다. 임베딩 모델과 기존 DB는 유지했다.
+- 검색어/문서 선별 캐시를 모델별로 분리하고 Responses의 텍스트 블록을 JSON 파서에 연결했다. 이전 모델의 생성 캐시는 기존 모델별 키로 분리된다.
+- `.venv/Scripts/python.exe scripts/run_tests.py`: 74개 통과, 실패/오류 0, 19.115초. 새 검사는 Responses 요청 경로·모델·temperature 미전송·텍스트 블록 해석과 기존 모델 재설정을 확인한다.
+- `.venv/Scripts/python.exe scripts/check_rag_security.py`: 비밀 파일 추적·실제 키 혼입·예시 환경변수의 채워진 값 0, `.env` 제외 확인.
+- `.venv/Scripts/python.exe scripts/verify_luna.py`: 실제 GMS 질문 「수성못 카페 상권의 특징을 검색 근거로 설명해줘」 1건 통과. 프롬프트 1·2·3 실제 실행, 생성 캐시 미사용, 두 컬렉션 검색 4/2건, 근거 2개, 본문/목록 번호 일치, 서비스 경고·대체 응답 없음.
+- 전체 29.565초(그래프 retrieve 15.763초, generate 13.718초). 신규 모델의 품질 향상이나 속도 개선을 입증하는 비교 실험은 아니다. 원시 결과: `data/processed/luna_verification.json`.
+- 아래 2026-10-22 기록 및 F2015 비교는 이전 모델 실행 기록으로 보존한다. 실행 중인 서버는 재시작 후 새 기본 모델이 반영된다.
+
 2026-10-22, 프로젝트의 기존 Python venv/Chroma/Streamlit/LangGraph 환경. 모델 호출과 오프라인 회귀 검사를 구분한다. 실제 키 값과 프롬프트 전문은 이 문서에 기록하지 않는다.
 
 ## 실제 색인

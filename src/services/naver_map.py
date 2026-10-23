@@ -89,7 +89,9 @@ def render_map(latitude, longitude, markers=None, radius=None, zoom=14, show_mar
     client_id = (os.getenv("NAVER_MAP_CLIENT_ID", "").strip()
                  or os.getenv("NAVER_CLIENT_ID", "").strip())
     if not client_id:
-        st.info("네이버 지도 연결 준비 중입니다. 지도 인증 설정 후 이 위치에 표시됩니다.")
+        points = [{'lat': float(p['lat']), 'lon': float(p['lon'])} for p in (markers or [])]
+        st.map(points or [{'lat': float(latitude), 'lon': float(longitude)}], zoom=zoom, height=height)
+        st.caption('지역 수집 기준점입니다. 분석 반경과 집계 범위는 답변을 참고하세요.')
         return
     # SDK 인증은 현재 페이지 URL을 사용하므로 about:srcdoc iframe에 넣지 않는다.
     # 실행 코드는 고정 템플릿이며 외부 문자열은 이스케이프한 JSON 데이터로만 전달한다.

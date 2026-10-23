@@ -1,5 +1,6 @@
 """F2015: 동일 모델의 무검색 답변과 실제 서비스 답변 5쌍을 기록한다."""
 import json
+import argparse
 import re
 import sys
 import time
@@ -22,7 +23,7 @@ CASES = [
 ]
 
 
-def main():
+def main(output_path=None):
     settings = load_settings()
     if not settings.get('external_processing_approved') or settings['generation_mode'] != 'llm':
         raise ValueError('승인된 GMS llm 설정에서만 실제 비교를 실행합니다.')
@@ -30,13 +31,13 @@ def main():
     results = {'executed_at':datetime.now(timezone.utc).isoformat(), 'model':llm.model_name,
                'method':'무검색 LLM 대 실제 CSV/PDF 검증·RAG 검색·발췌 결합 서비스 비교. 순수 프롬프트 단독 효과 실험이 아님.',
                'cases':[]}
-    output = BASE_DIR/'data/processed/rag_quality_comparison.json'
+    output = Path(output_path) if output_path else BASE_DIR/'data/processed/rag_quality_comparison.json'
     for region, question, kind in CASES:
         start = time.perf_counter()
         # 질문·지역명 외에 CSV/PDF·검색 결과·정답·이전 대화는 보내지 않는다.
         baseline = llm.invoke([
             ('system', '너는 대구 상권 분석 도우미다. 질문에 사실에 근거해 답하고, 모르는 수치는 알 수 없다고 밝혀라. 출처를 만들어내지 마라.'),
-            ('human', f'선택 지역: {get_spot(region)["name"]}\n질문: {question}')]).content
+            ('human', f'선택 지역: {get_spot(region)["name"]}\n질문: {question}')]).text
         before_seconds = round(time.perf_counter()-start,3)
         stores, metadata = load_spot_data(region)
         session = {}
@@ -48,15 +49,19 @@ def main():
         results['cases'].append({'region':region,'question':question,'kind':kind,
             'before':baseline,'before_seconds':before_seconds,'after':answer,
             'after_seconds':round(time.perf_counter()-start,3),'visual':visual,
-            'citations':rag['citations'],'trace':rag['trace'],'statuses':rag['statuses']})
+            'citations':rag['citations'],'trace':rag['trace'],'statuses':rag['statuses'],
+            'collection_audit':rag.get('collection_audit',{})})
         output.parent.mkdir(parents=True,exist_ok=True)
         output.write_text(json.dumps(results,ensure_ascii=False,indent=2),encoding='utf-8')
         print(f'{len(results["cases"])}/5 {kind}: 실제 응답 저장',flush=True)
 
 
 if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--output')
+    args = parser.parse_args()
     try:
-        main()
+        main(args.output)
     except Exception as error:
         print('비교 중단: '+type(error).__name__+' (완료로 처리하지 않음)',file=sys.stderr)
         raise SystemExit(1)

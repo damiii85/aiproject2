@@ -21,7 +21,6 @@ from src.rag.document_prompts import QUERY_PROMPT, SELECTION_PROMPT
 from src.rag.settings import load_settings
 
 load_dotenv(BASE_DIR / ".env")
-DB_PATH = BASE_DIR / "data/chroma_db"
 RAW_PATH = BASE_DIR / "data/raw/external_documents"
 COLLECTION_NAME = "external_documents"
 
@@ -35,8 +34,10 @@ def gms_options():
 
 
 def get_llm(timeout=45):
-    return ChatOpenAI(model=os.getenv("GMS_LLM_MODEL", "gpt-4o-mini"),
-                      temperature=0, timeout=timeout, max_retries=1, **gms_options())
+    model = os.getenv("GMS_LLM_MODEL", "gpt-6-luna")
+    options = {"use_responses_api": True, "output_version": "responses/v1"} if model.startswith("gpt-6") else {"temperature": 0}
+    return ChatOpenAI(model=model, timeout=timeout, max_retries=1,
+                      **options, **gms_options())
 
 
 def get_embeddings():
@@ -48,7 +49,14 @@ def get_embeddings():
 def ask_json(llm, system, payload):
     reply = llm.invoke([("system", system),
                         ("human", json.dumps(payload, ensure_ascii=False))])
-    content = reply.content.strip()
+    # Responses API returns text alongside optional reasoning blocks.
+    content = reply.content
+    if isinstance(content, list):
+        content = "".join(block.get("text", "") for block in content
+                          if isinstance(block, dict) and block.get("type") in ("text", "output_text"))
+    if not isinstance(content, str) or not content.strip():
+        raise ValueError("LLM 응답에 확인 가능한 텍스트가 없습니다.")
+    content = content.strip()
     if content.startswith("```"):
         content = "\n".join(content.splitlines()[1:-1])
     try:
@@ -111,8 +119,9 @@ def split_document(text, chunk_size=None, chunk_overlap=None):
     return splitter.split_text(text)
 
 
-def get_collection(create=False, db_path=DB_PATH):
-    client = chromadb.PersistentClient(path=str(db_path))
+def get_collection(create=False, db_path=None):
+    from src.rag.portable_db import chroma_path
+    client = chromadb.PersistentClient(path=str(db_path or chroma_path()))
     if create:
         return client.get_or_create_collection(name=COLLECTION_NAME,
                                                metadata={"description": "외부 창업·상권 문서 본문"})
@@ -137,7 +146,7 @@ def index_document(document, collection, embeddings, chunk_size=None, chunk_over
         {field: document[field] for field in ('region_id','source_type','page','reference','corpus_version') if field in document}
     ]).encode()).hexdigest()
     ids = [f"{doc_id}:{revision}:{i}" for i in range(len(chunks))]
-    existing = collection.get(where={"document_id": doc_id}, include=["metadatas"])
+    existing = collection.get(where={'$and': [{"document_id": doc_id}, {"embedding_model": model}]}, include=["metadatas"])
     existing_ids = set(existing["ids"])
     pending = [(i, text) for i, text in enumerate(chunks) if ids[i] not in existing_ids]
     for start in range(0, len(pending), 50):
